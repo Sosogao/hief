@@ -1,0 +1,89 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://hief.dev/schemas/reputation.schema.json",
+    "title": "HIEF ReputationSnapshot (HIEF-REP-01 v0.1)",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "repVersion",
+        "account",
+        "asOf",
+        "scores",
+        "metrics",
+        "behaviorTags"
+    ],
+    "properties": {
+        "repVersion": { "type": "string", "const": "0.1" },
+        "account": { "$ref": "#/$defs/address" },
+        "asOf": { "$ref": "#/$defs/asOf" },
+        "scores": { "$ref": "#/$defs/scores" },
+        "metrics": { "$ref": "#/$defs/metrics" },
+        "behaviorTags": {
+            "type": "array",
+            "items": { "type": "string" }
+        },
+        "signature": { "$ref": "#/$defs/signature" }
+    },
+    "$defs": {
+        "address": {
+            "type": "string",
+            "pattern": "^0x[0-9a-fA-F]{40}$"
+        },
+        "uintString": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+        },
+        "asOf": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["chainId", "blockNumber", "timestamp"],
+            "properties": {
+                "chainId": { "type": "integer", "minimum": 1 },
+                "blockNumber": { "type": "integer", "minimum": 0 },
+                "timestamp": { "type": "integer", "minimum": 0 }
+            }
+        },
+        "scores": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["successRate", "riskScore", "volumeScore", "diversityScore"],
+            "properties": {
+                "successRate": { "type": "integer", "minimum": 0, "maximum": 10000 },
+                "riskScore": { "type": "integer", "minimum": 0, "maximum": 1000 },
+                "volumeScore": { "type": "integer", "minimum": 0, "maximum": 1000 },
+                "diversityScore": { "type": "integer", "minimum": 0, "maximum": 1000 },
+                "alphaScore": { "type": "integer", "minimum": 0, "maximum": 1000 }
+            }
+        },
+        "metrics": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+                "totalIntents",
+                "successfulIntents",
+                "failedIntents",
+                "totalVolumeUSD",
+                "uniqueSkillsUsed",
+                "lastActivityTimestamp"
+            ],
+            "properties": {
+                "totalIntents": { "type": "integer", "minimum": 0 },
+                "successfulIntents": { "type": "integer", "minimum": 0 },
+                "failedIntents": { "type": "integer", "minimum": 0 },
+                "totalVolumeUSD": { "$ref": "#/$defs/uintString" },
+                "uniqueSkillsUsed": { "type": "integer", "minimum": 0 },
+                "lastActivityTimestamp": { "type": "integer", "minimum": 0 }
+            }
+        },
+        "signature": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "signer", "sig"],
+            "properties": {
+                "type": { "type": "string", "const": "REPUTATION_SERVICE" },
+                "signer": { "$ref": "#/$defs/address" },
+                "sig": { "type": "string", "pattern": "^0x[0-9a-fA-F]*$" }
+            }
+        }
+    }
+}

@@ -1,0 +1,340 @@
+openapi: 3.1.0
+info:
+  title: HIEF MVP API
+  version: 0.1.0
+  description: >
+    HIEF MVP APIs for Intent Bus, Policy Engine, Solver Plugins, and Safe Adapter.
+servers:
+  - url: https://api.hief.example/v1
+tags:
+  - name: Intents
+  - name: Solutions
+  - name: Policy
+  - name: Proposals
+  - name: Solver
+  - name: Webhooks
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  headers:
+    IdempotencyKey:
+      description: Idempotency key for write requests.
+      schema:
+        type: string
+  schemas:
+    Intent:
+      $ref: ../schemas/intent.schema.json
+    Solution:
+      $ref: ../schemas/solution.schema.json
+    PolicyResult:
+      $ref: ../schemas/policy-result.schema.json
+    ReputationSnapshot:
+      $ref: ../schemas/reputation.schema.json
+    Error:
+      type: object
+      required:
+        - errorCode
+        - message
+      properties:
+        errorCode: { type: string }
+        message: { type: string }
+    SubmitIntentResponse:
+      type: object
+      required: [intentId, intentHash, status, quoteWindowMs]
+      properties:
+        intentId: { type: string }
+        intentHash: { type: string }
+        status: { type: string, enum: [BROADCAST] }
+        quoteWindowMs: { type: integer }
+    SolutionSummary:
+      type: object
+      required: [solutionId, solverId, expectedOut, fee, validUntil, status]
+      properties:
+        solutionId: { type: string }
+        solverId: { type: string }
+        expectedOut: { type: string }
+        fee: { type: string }
+        validUntil: { type: integer }
+        status: { type: string, enum: [SUBMITTED, RANKED, SELECTED, REJECTED, EXPIRED, WITHDRAWN] }
+    ListSolutionsResponse:
+      type: object
+      required: [intentId, solutions]
+      properties:
+        intentId: { type: string }
+        solutions:
+          type: array
+          items:
+            $ref: '#/components/schemas/SolutionSummary'
+    SelectSolutionRequest:
+      type: object
+      required: [solutionId]
+      properties:
+        solutionId: { type: string }
+        selectionReason: { type: string, enum: [BEST_QUOTE, BEST_SCORE, USER_CHOICE, FALLBACK] }
+    SelectSolutionResponse:
+      type: object
+      required: [intentId, selectedSolutionId, status]
+      properties:
+        intentId: { type: string }
+        selectedSolutionId: { type: string }
+        status: { type: string, enum: [SELECTED] }
+    CreateProposalRequest:
+      type: object
+      required: [solutionId, adapter, safeAddress, chainId]
+      properties:
+        solutionId: { type: string }
+        adapter: { type: string, enum: [SAFE_V1] }
+        safeAddress: { type: string }
+        chainId: { type: integer }
+    CreateProposalResponse:
+      type: object
+      required: [proposalId, status]
+      properties:
+        proposalId: { type: string }
+        status: { type: string, enum: [PROPOSED_TO_SAFE] }
+        safeTxHash: { type: string, nullable: true }
+        humanSummary:
+          type: array
+          items: { type: string }
+    CancelIntentResponse:
+      type: object
+      required: [intentId, status]
+      properties:
+        intentId: { type: string }
+        status: { type: string, enum: [CANCELLED] }
+    ValidateSolutionRequest:
+      type: object
+      required: [intent, solution]
+      properties:
+        intent: { $ref: '#/components/schemas/Intent' }
+        solution: { $ref: '#/components/schemas/Solution' }
+        reputation: { $ref: '#/components/schemas/ReputationSnapshot' }
+    ValidateIntentRequest:
+      type: object
+      required: [intent]
+      properties:
+        intent: { $ref: '#/components/schemas/Intent' }
+        reputation: { $ref: '#/components/schemas/ReputationSnapshot' }
+    EvidenceResponse:
+      type: object
+      description: Evidence payload such as fork block, traces, diffs. Implementation-defined.
+    SolverQuoteRequest:
+      type: object
+      required: [intent, intentHash, policyRef]
+      properties:
+        intent: { $ref: '#/components/schemas/Intent' }
+        intentHash: { type: string }
+        reputation: { $ref: '#/components/schemas/ReputationSnapshot' }
+        policyRef:
+          type: object
+          required: [policyVersion]
+          properties:
+            policyVersion: { type: string }
+    WebhookEvent:
+      type: object
+      required: [eventType, timestamp]
+      properties:
+        eventType: { type: string, enum: [INTENT_STATUS, SOLUTION_STATUS, PROPOSAL_STATUS] }
+        timestamp: { type: integer }
+        intentId: { type: string, nullable: true }
+        solutionId: { type: string, nullable: true }
+        proposalId: { type: string, nullable: true }
+        status: { type: string, nullable: true }
+        payload: { type: object }
+security:
+  - bearerAuth: []
+paths:
+  /intents:
+    post:
+      tags: [Intents]
+      summary: Submit a new Intent
+      parameters: [ { $ref: '#/components/headers/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Intent' }
+      responses:
+        '200':
+          description: Intent accepted and broadcasted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SubmitIntentResponse' }
+  /intents/{intentId}:
+    get:
+      tags: [Intents]
+      summary: Get intent details and status
+      parameters: [ { name: intentId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200':
+          description: Intent details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Intent' }
+    post:
+      tags: [Intents]
+      summary: Cancel an intent if not executed
+      operationId: cancelIntent
+      parameters:
+        - { name: intentId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/headers/IdempotencyKey' }
+      responses:
+        '200':
+          description: Cancelled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CancelIntentResponse' }
+  /intents/{intentId}/solutions:
+    get:
+      tags: [Solutions]
+      summary: List solutions for an intent
+      parameters:
+        - { name: intentId, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 20 } }
+        - { name: status, in: query, schema: { type: string, enum: [SUBMITTED, RANKED, SELECTED, REJECTED, EXPIRED, WITHDRAWN] } }
+      responses:
+        '200':
+          description: Solutions list
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ListSolutionsResponse' }
+  /solutions:
+    post:
+      tags: [Solutions]
+      summary: Submit a Solution (push mode)
+      parameters: [ { $ref: '#/components/headers/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Solution' }
+      responses:
+        '200':
+          description: Solution accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [solutionId, status]
+                properties:
+                  solutionId: { type: string }
+                  status: { type: string, enum: [SUBMITTED] }
+  /intents/{intentId}/select:
+    post:
+      tags: [Intents]
+      summary: Select a solution for an intent
+      parameters:
+        - { name: intentId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/headers/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SelectSolutionRequest' }
+      responses:
+        '200':
+          description: Selected
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelectSolutionResponse' }
+  /intents/{intentId}/policy:
+    get:
+      tags: [Policy]
+      summary: Get PolicyResult for intent (default selected solution)
+      parameters:
+        - { name: intentId, in: path, required: true, schema: { type: string } }
+        - { name: solutionId, in: query, schema: { type: string } }
+      responses:
+        '200':
+          description: PolicyResult
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolicyResult' }
+  /policy/validateIntent:
+    post:
+      tags: [Policy]
+      summary: Validate Intent (pre-check)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ValidateIntentRequest' }
+      responses:
+        '200':
+          description: PolicyResult
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolicyResult' }
+  /policy/validateSolution:
+    post:
+      tags: [Policy]
+      summary: Validate Solution (final)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ValidateSolutionRequest' }
+      responses:
+        '200':
+          description: PolicyResult
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PolicyResult' }
+  /policy/evidence/{evidenceId}:
+    get:
+      tags: [Policy]
+      summary: Fetch evidence payload (trace/diff/fork details)
+      parameters: [ { name: evidenceId, in: path, required: true, schema: { type: string } } ]
+      responses:
+        '200':
+          description: Evidence
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EvidenceResponse' }
+  /intents/{intentId}/proposals:
+    post:
+      tags: [Proposals]
+      summary: Create a Safe proposal from selected solution
+      parameters:
+        - { name: intentId, in: path, required: true, schema: { type: string } }
+        - { $ref: '#/components/headers/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateProposalRequest' }
+      responses:
+        '200':
+          description: Proposal created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateProposalResponse' }
+  /solver/quote:
+    post:
+      tags: [Solver]
+      summary: Solver plugin quote endpoint (pull mode)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SolverQuoteRequest' }
+      responses:
+        '200':
+          description: Solver returns a Solution
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Solution' }
+  /webhooks/events:
+    post:
+      tags: [Webhooks]
+      summary: Generic webhook endpoint (intent/solution/proposal status)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebhookEvent' }
+      responses:
+        '200':
+          description: Accepted

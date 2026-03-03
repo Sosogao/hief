@@ -1,0 +1,31 @@
+{
+    "solutionVersion": "0.1",
+    "solutionId": "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "intentId": "0x7f2b8a8d5d6d6f2b1b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7081920a0b0c0d",
+    "intentHash": "0x<DIFFERENT_INTENT_HASH_PLACEHOLDER>",
+    "solverId": "0x2222222222222222222222222222222222222222",
+    "executionPlan": {
+        "calls": [
+            {
+                "to": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+                "value": "0",
+                "data": "0x<SWAP_ROUTER_DATA_PLACEHOLDER>",
+                "operation": "CALL"
+            }
+        ]
+    },
+    "quote": {
+        "expectedOut": "251000000000000000",
+        "fee": "1000000",
+        "validUntil": 1777777700
+    },
+    "stakeSnapshot": {
+        "amount": "1000000000000000000000",
+        "blockNumber": 12345678
+    },
+    "signature": {
+        "type": "EIP712_EOA",
+        "signer": "0x2222222222222222222222222222222222222222",
+        "sig": "0x<SOLVER_SIGNATURE_PLACEHOLDER>"
+    }
+}

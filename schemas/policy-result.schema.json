@@ -1,0 +1,113 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://hief.dev/schemas/policy-result.schema.json",
+    "title": "HIEF PolicyResult (HIEF-POL-01 v0.1)",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+        "policyResultVersion",
+        "policyRef",
+        "intentHash",
+        "status",
+        "findings",
+        "riskTags",
+        "summary",
+        "timestamp"
+    ],
+    "properties": {
+        "policyResultVersion": { "type": "string", "const": "0.1" },
+        "policyRef": { "$ref": "#/components/schemas/Intent/properties/policyRef" },
+        "intentHash": { "$ref": "#/components/schemas/Solution/properties/intentHash" },
+        "solutionId": { "$ref": "#/components/schemas/Solution/properties/solutionId" },
+        "solutionHash": { "$ref": "#/components/schemas/Solution/properties/intentHash" },
+        "status": { "type": "string", "enum": ["PASS", "WARN", "FAIL"] },
+        "findings": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/finding" }
+        },
+        "riskTags": {
+            "type": "array",
+            "items": { "type": "string" }
+        },
+        "summary": {
+            "type": "array",
+            "items": { "type": "string" }
+        },
+        "evidenceRefs": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/evidenceRef" }
+        },
+        "executionDiff": { "$ref": "#/$defs/executionDiff" },
+        "timestamp": { "type": "integer", "minimum": 0 },
+        "signature": { "$ref": "#/$defs/signature" }
+    },
+    "$defs": {
+        "finding": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ruleId", "severity", "message"],
+            "properties": {
+                "ruleId": { "type": "string" },
+                "severity": { "type": "string", "enum": ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"] },
+                "message": { "type": "string" },
+                "evidence": { "type": "object", "additionalProperties": true },
+                "relatedCallIndex": { "type": "integer", "minimum": 0 }
+            }
+        },
+        "evidenceRef": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "value"],
+            "properties": {
+                "type": { "type": "string" },
+                "value": { "type": "string" }
+            }
+        },
+        "tokenChange": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["account", "token", "delta"],
+            "properties": {
+                "account": { "$ref": "#/components/schemas/Intent/properties/smartAccount" },
+                "token": { "$ref": "#/components/schemas/Intent/properties/input/properties/token" },
+                "delta": { "type": "string" }
+            }
+        },
+        "allowanceChange": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["owner", "spender", "token", "newAllowance"],
+            "properties": {
+                "owner": { "$ref": "#/components/schemas/Intent/properties/smartAccount" },
+                "spender": { "$ref": "#/components/schemas/Intent/properties/smartAccount" },
+                "token": { "$ref": "#/components/schemas/Intent/properties/input/properties/token" },
+                "newAllowance": { "$ref": "#/components/schemas/Intent/properties/input/properties/amount" }
+            }
+        },
+        "executionDiff": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "tokenChanges": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/tokenChange" }
+                },
+                "allowanceChanges": {
+                    "type": "array",
+                    "items": { "$ref": "#/$defs/allowanceChange" }
+                },
+                "safeConfigChanged": { "type": "boolean" }
+            }
+        },
+        "signature": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type", "signer", "sig"],
+            "properties": {
+                "type": { "type": "string", "const": "POLICY_SERVER" },
+                "signer": { "$ref": "#/components/schemas/Intent/properties/smartAccount" },
+                "sig": { "$ref": "#/components/schemas/Solution/properties/signature/properties/sig" }
+            }
+        }
+    }
+}
