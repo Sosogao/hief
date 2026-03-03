@@ -77,8 +77,8 @@ const SERVICES = [
     name: 'nft-sync',
     port: 3007,
     dir: 'packages/nft-sync',
-    cmd: 'npx',
-    args: ['tsx', 'src/server.ts'],
+    cmd: 'node',
+    args: ['dist/server.js'],
     env: {
       PORT: '3007',
       REPUTATION_API_URL: 'http://localhost:3005'
@@ -90,8 +90,8 @@ const SERVICES = [
     name: 'solver-network',
     port: 3008,
     dir: 'packages/solver-network',
-    cmd: 'npx',
-    args: ['tsx', 'src/server.ts'],
+    cmd: 'node',
+    args: ['dist/server.js'],
     env: {
       PORT: '3008',
       BUS_URL: 'http://localhost:3001'
