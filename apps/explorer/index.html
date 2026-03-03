@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HIEF Intent Explorer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {
+      --accent: #6366f1;
+      --accent-dark: #4f46e5;
+    }
+    body { background: #0f0f1a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+    .glass {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(12px);
+    }
+    .tier-UNKNOWN  { background:#374151; color:#9ca3af; }
+    .tier-LOW      { background:#1e3a5f; color:#60a5fa; }
+    .tier-STANDARD { background:#1a3a2a; color:#4ade80; }
+    .tier-TRUSTED  { background:#3b2a1a; color:#fb923c; }
+    .tier-ELITE    { background:#2d1a3a; color:#c084fc; }
+    .score-ring {
+      width: 160px; height: 160px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      position: relative;
+    }
+    .score-ring canvas { position: absolute; top: 0; left: 0; }
+    .score-ring .inner { z-index: 1; text-align: center; }
+    .tag-pill {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 9999px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      background: rgba(99,102,241,0.15);
+      border: 1px solid rgba(99,102,241,0.3);
+      color: #a5b4fc;
+    }
+    input:focus { outline: none; box-shadow: 0 0 0 2px rgba(99,102,241,0.5); }
+    .animate-pulse-slow { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    .skeleton { background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+  </style>
+</head>
+<body class="min-h-screen">
+
+  <!-- Header -->
+  <header class="border-b border-white/5 px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold text-sm">H</div>
+      <span class="font-semibold text-white">HIEF Intent Explorer</span>
+      <span class="text-xs text-slate-500 ml-1">Reputation Layer v0.1</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="networkBadge" class="text-xs px-2 py-1 rounded-full bg-emerald-900/50 text-emerald-400 border border-emerald-700/50">● Base Mainnet</span>
+    </div>
+  </header>
+
+  <!-- Search Bar -->
+  <div class="max-w-3xl mx-auto px-4 mt-12 mb-8">
+    <h1 class="text-3xl font-bold text-white mb-2 text-center">Intent Reputation Explorer</h1>
+    <p class="text-slate-400 text-center mb-8 text-sm">Look up any address's HIEF reputation score, behavior tags, and execution history.</p>
+    <div class="flex gap-2">
+      <input
+        id="addressInput"
+        type="text"
+        placeholder="Enter wallet address (0x...)"
+        class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm transition-all"
+      />
+      <button
+        id="searchBtn"
+        onclick="lookupAddress()"
+        class="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm transition-colors"
+      >
+        Search
+      </button>
+    </div>
+    <div class="flex gap-2 mt-3 flex-wrap">
+      <span class="text-xs text-slate-500">Try examples:</span>
+      <button onclick="setExample('0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Elite Trader</button>
+      <button onclick="setExample('0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">New User</button>
+    </div>
+  </div>
+
+  <!-- Results Container -->
+  <div id="results" class="max-w-5xl mx-auto px-4 pb-16 hidden">
+
+    <!-- Top Row: Score Ring + Key Metrics -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+
+      <!-- Score Ring Card -->
+      <div class="glass rounded-2xl p-6 flex flex-col items-center justify-center">
+        <div class="score-ring mb-3">
+          <canvas id="scoreRingChart" width="160" height="160"></canvas>
+          <div class="inner">
+            <div id="scoreValue" class="text-4xl font-bold text-white">—</div>
+            <div class="text-xs text-slate-400 mt-1">/ 1000</div>
+          </div>
+        </div>
+        <div id="tierBadge" class="tier-UNKNOWN text-xs font-bold px-3 py-1 rounded-full mb-2">UNKNOWN</div>
+        <div id="addressDisplay" class="text-xs text-slate-500 font-mono text-center break-all"></div>
+      </div>
+
+      <!-- Dimension Scores -->
+      <div class="glass rounded-2xl p-6 col-span-2">
+        <h3 class="text-sm font-semibold text-slate-300 mb-4">Score Breakdown</h3>
+        <div class="space-y-3" id="dimensionScores">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Behavior Tags -->
+    <div class="glass rounded-2xl p-5 mb-4">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Behavior Tags</h3>
+      <div id="behaviorTags" class="flex flex-wrap gap-2">
+        <span class="text-xs text-slate-500">No tags yet</span>
+      </div>
+    </div>
+
+    <!-- Metrics Grid -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" id="metricsGrid">
+      <!-- Populated by JS -->
+    </div>
+
+    <!-- Radar Chart + History -->
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+      <div class="glass rounded-2xl p-5">
+        <h3 class="text-sm font-semibold text-slate-300 mb-4">Dimension Radar</h3>
+        <div style="height:220px;"><canvas id="radarChart"></canvas></div>
+      </div>
+      <div class="glass rounded-2xl p-5">
+        <h3 class="text-sm font-semibold text-slate-300 mb-4">Score History</h3>
+        <div style="height:220px;"><canvas id="historyChart"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Snapshot Metadata -->
+    <div class="glass rounded-2xl p-5">
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">Snapshot Metadata</h3>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs" id="snapshotMeta">
+        <!-- Populated by JS -->
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Leaderboard -->
+  <div class="max-w-5xl mx-auto px-4 pb-16" id="leaderboardSection">
+    <div class="glass rounded-2xl p-6">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-sm font-semibold text-slate-300">🏆 Top Reputation Addresses</h3>
+        <button onclick="loadLeaderboard()" class="text-xs text-indigo-400 hover:text-indigo-300">Refresh</button>
+      </div>
+      <div id="leaderboardBody">
+        <div class="text-xs text-slate-500 text-center py-8">Loading leaderboard...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Error Toast -->
+  <div id="errorToast" class="fixed bottom-6 right-6 bg-red-900/90 border border-red-700 text-red-200 text-sm px-4 py-3 rounded-xl hidden max-w-sm">
+    <span id="errorMsg"></span>
+  </div>
+
+<script>
+// ─── Config ────────────────────────────────────────────────────────────────
+const API_BASE = (window.REPUTATION_API_URL || 'http://localhost:3002');
+const CHAIN_ID = 8453; // Base mainnet
+
+// ─── Charts ────────────────────────────────────────────────────────────────
+let scoreRingChartInstance = null;
+let radarChartInstance = null;
+let historyChartInstance = null;
+
+function createScoreRing(score) {
+  const ctx = document.getElementById('scoreRingChart').getContext('2d');
+  if (scoreRingChartInstance) scoreRingChartInstance.destroy();
+  const pct = score / 1000;
+  const color = score >= 850 ? '#c084fc' : score >= 600 ? '#fb923c' : score >= 300 ? '#4ade80' : score >= 100 ? '#60a5fa' : '#6b7280';
+  scoreRingChartInstance = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      datasets: [{
+        data: [pct, 1 - pct],
+        backgroundColor: [color, 'rgba(255,255,255,0.05)'],
+        borderWidth: 0,
+        hoverOffset: 0,
+      }]
+    },
+    options: {
+      cutout: '78%',
+      plugins: { legend: { display: false }, tooltip: { enabled: false } },
+      animation: { duration: 800, easing: 'easeInOutQuart' },
+    }
+  });
+}
+
+function createRadar(scores) {
+  const ctx = document.getElementById('radarChart').getContext('2d');
+  if (radarChartInstance) radarChartInstance.destroy();
+  radarChartInstance = new Chart(ctx, {
+    type: 'radar',
+    data: {
+      labels: ['Success', 'Volume', 'Alpha', 'Diversity'],
+      datasets: [{
+        label: 'Score',
+        data: [scores.success, scores.volume, scores.alpha, scores.diversity].map(v => Math.round(v)),
+        backgroundColor: 'rgba(99,102,241,0.15)',
+        borderColor: '#6366f1',
+        borderWidth: 2,
+        pointBackgroundColor: '#6366f1',
+        pointRadius: 4,
+      }]
+    },
+    options: {
+      scales: {
+        r: {
+          min: 0, max: 1000,
+          ticks: { color: '#64748b', font: { size: 9 }, stepSize: 250 },
+          grid: { color: 'rgba(255,255,255,0.06)' },
+          pointLabels: { color: '#94a3b8', font: { size: 11 } },
+        }
+      },
+      plugins: { legend: { display: false } },
+    }
+  });
+}
+
+function createHistory(history) {
+  const ctx = document.getElementById('historyChart').getContext('2d');
+  if (historyChartInstance) historyChartInstance.destroy();
+  if (!history || history.length === 0) {
+    historyChartInstance = null;
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    ctx.fillStyle = '#475569';
+    ctx.font = '12px system-ui';
+    ctx.textAlign = 'center';
+    ctx.fillText('No history available', ctx.canvas.width / 2, ctx.canvas.height / 2);
+    return;
+  }
+  const labels = history.map(h => new Date(h.computedAt).toLocaleDateString());
+  const data   = history.map(h => h.scores.final);
+  historyChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: 'Final Score',
+        data,
+        borderColor: '#6366f1',
+        backgroundColor: 'rgba(99,102,241,0.1)',
+        borderWidth: 2,
+        pointRadius: 3,
+        fill: true,
+        tension: 0.4,
+      }]
+    },
+    options: {
+      scales: {
+        y: { min: 0, max: 1000, ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
+        x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { display: false } },
+      },
+      plugins: { legend: { display: false } },
+    }
+  });
+}
+
+// ─── Dimension Bar ─────────────────────────────────────────────────────────
+function renderDimensions(scores) {
+  const dims = [
+    { key: 'success',   label: 'Success Rate',  color: '#4ade80', weight: '35%' },
+    { key: 'volume',    label: 'Volume',         color: '#60a5fa', weight: '30%' },
+    { key: 'alpha',     label: 'Alpha',          color: '#f59e0b', weight: '20%' },
+    { key: 'diversity', label: 'Diversity',      color: '#c084fc', weight: '15%' },
+  ];
+  const container = document.getElementById('dimensionScores');
+  container.innerHTML = dims.map(d => {
+    const val = Math.round(scores[d.key] || 0);
+    const pct = (val / 1000) * 100;
+    return `
+      <div>
+        <div class="flex justify-between text-xs mb-1">
+          <span class="text-slate-400">${d.label} <span class="text-slate-600">(weight ${d.weight})</span></span>
+          <span class="font-mono text-white">${val}</span>
+        </div>
+        <div class="h-1.5 rounded-full bg-white/5 overflow-hidden">
+          <div class="h-full rounded-full transition-all duration-700" style="width:${pct}%;background:${d.color}"></div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ─── Metrics Grid ──────────────────────────────────────────────────────────
+function renderMetrics(metrics) {
+  const items = [
+    { label: 'Total Intents',    value: metrics.totalIntentsSubmitted?.toLocaleString() ?? '—' },
+    { label: 'Success Rate',     value: metrics.successRate != null ? (metrics.successRate * 100).toFixed(1) + '%' : '—' },
+    { label: 'Total Volume',     value: metrics.totalVolumeUSD != null ? '$' + formatNum(metrics.totalVolumeUSD) : '—' },
+    { label: 'Active Weeks',     value: metrics.activeWeeks?.toString() ?? '—' },
+    { label: 'Unique Skills',    value: metrics.uniqueSkillsUsed?.toString() ?? '—' },
+    { label: 'Alpha Trades',     value: metrics.alphaTradeCount?.toString() ?? '—' },
+    { label: 'Largest Trade',    value: metrics.largestSingleTradeUSD != null ? '$' + formatNum(metrics.largestSingleTradeUSD) : '—' },
+    { label: 'Avg Slippage',     value: metrics.avgSlippageBps != null ? metrics.avgSlippageBps + ' bps' : '—' },
+  ];
+  document.getElementById('metricsGrid').innerHTML = items.map(i => `
+    <div class="glass rounded-xl p-4">
+      <div class="text-xs text-slate-500 mb-1">${i.label}</div>
+      <div class="text-lg font-semibold text-white">${i.value}</div>
+    </div>`).join('');
+}
+
+function formatNum(n) {
+  if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n/1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
+  return n.toFixed(2);
+}
+
+// ─── Snapshot Meta ─────────────────────────────────────────────────────────
+function renderMeta(snapshot) {
+  const items = [
+    { label: 'Snapshot ID',   value: snapshot.snapshotId?.slice(0, 20) + '...' },
+    { label: 'Computed At',   value: new Date(snapshot.computedAt).toLocaleString() },
+    { label: 'Decay Factor',  value: snapshot.scores?.decayFactor?.toFixed(4) ?? '—' },
+    { label: 'Block Number',  value: snapshot.blockNumber?.toLocaleString() ?? 'Pending' },
+    { label: 'Chain ID',      value: snapshot.chainId?.toString() ?? '—' },
+    { label: 'Version',       value: snapshot.version ?? '—' },
+  ];
+  document.getElementById('snapshotMeta').innerHTML = items.map(i => `
+    <div>
+      <div class="text-slate-500 mb-1">${i.label}</div>
+      <div class="text-slate-200 font-mono">${i.value}</div>
+    </div>`).join('');
+}
+
+// ─── Tags ──────────────────────────────────────────────────────────────────
+function renderTags(tags) {
+  const container = document.getElementById('behaviorTags');
+  if (!tags || tags.length === 0) {
+    container.innerHTML = '<span class="text-xs text-slate-500">No behavior tags yet</span>';
+    return;
+  }
+  container.innerHTML = tags.map(t => `<span class="tag-pill">${t.replace(/_/g,' ')}</span>`).join('');
+}
+
+// ─── Main Lookup ───────────────────────────────────────────────────────────
+async function lookupAddress() {
+  const raw = document.getElementById('addressInput').value.trim();
+  if (!raw) return;
+
+  const address = raw.toLowerCase();
+  if (!/^0x[0-9a-f]{40}$/.test(address)) {
+    showError('Invalid Ethereum address format');
+    return;
+  }
+
+  document.getElementById('results').classList.remove('hidden');
+  document.getElementById('addressDisplay').textContent = address.slice(0,6) + '...' + address.slice(-4);
+  document.getElementById('scoreValue').textContent = '...';
+
+  try {
+    // Fetch snapshot
+    const res = await fetch(`${API_BASE}/v1/reputation/${CHAIN_ID}/${address}`);
+    const json = await res.json();
+
+    if (!res.ok || !json.success) {
+      showError(json.error || 'Failed to fetch reputation');
+      return;
+    }
+
+    const snapshot = json.data;
+    const scores   = snapshot.scores;
+    const metrics  = snapshot.metrics;
+
+    // Score ring
+    document.getElementById('scoreValue').textContent = Math.round(scores.final);
+    createScoreRing(scores.final);
+
+    // Tier badge
+    const tierEl = document.getElementById('tierBadge');
+    tierEl.textContent = snapshot.riskTier;
+    tierEl.className = `tier-${snapshot.riskTier} text-xs font-bold px-3 py-1 rounded-full mb-2`;
+
+    // Dimensions
+    renderDimensions(scores);
+
+    // Tags
+    renderTags(snapshot.behaviorTags);
+
+    // Metrics
+    renderMetrics(metrics);
+
+    // Radar
+    createRadar(scores);
+
+    // Snapshot meta
+    renderMeta(snapshot);
+
+    // History
+    const histRes = await fetch(`${API_BASE}/v1/reputation/${CHAIN_ID}/${address}/history`);
+    const histJson = await histRes.json();
+    createHistory(histJson.success ? histJson.data : []);
+
+  } catch (err) {
+    showError('API unavailable. Start the reputation service on port 3002.');
+    console.error(err);
+  }
+}
+
+// ─── Leaderboard ───────────────────────────────────────────────────────────
+async function loadLeaderboard() {
+  const body = document.getElementById('leaderboardBody');
+  body.innerHTML = '<div class="text-xs text-slate-500 text-center py-4 animate-pulse-slow">Loading...</div>';
+
+  try {
+    const res = await fetch(`${API_BASE}/v1/reputation/${CHAIN_ID}/leaderboard?limit=10`);
+    const json = await res.json();
+
+    if (!res.ok || !json.success || json.data.length === 0) {
+      body.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">No data yet. Submit some intents to build reputation.</div>';
+      return;
+    }
+
+    const tierColors = { UNKNOWN:'#6b7280', LOW:'#60a5fa', STANDARD:'#4ade80', TRUSTED:'#fb923c', ELITE:'#c084fc' };
+
+    body.innerHTML = `
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-slate-500 border-b border-white/5">
+            <th class="text-left pb-2 font-medium">#</th>
+            <th class="text-left pb-2 font-medium">Address</th>
+            <th class="text-left pb-2 font-medium">Tier</th>
+            <th class="text-right pb-2 font-medium">Score</th>
+            <th class="text-right pb-2 font-medium">Success</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${json.data.map((row, i) => `
+            <tr class="border-b border-white/5 hover:bg-white/2 cursor-pointer" onclick="setExample('${row.address}');lookupAddress()">
+              <td class="py-2 text-slate-500">${i + 1}</td>
+              <td class="py-2 font-mono text-slate-300">${row.address.slice(0,8)}...${row.address.slice(-4)}</td>
+              <td class="py-2"><span style="color:${tierColors[row.riskTier] || '#6b7280'}">${row.riskTier}</span></td>
+              <td class="py-2 text-right font-semibold text-white">${Math.round(row.finalScore)}</td>
+              <td class="py-2 text-right text-slate-400">${row.successRate != null ? (row.successRate * 100).toFixed(1) + '%' : '—'}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  } catch (err) {
+    body.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">Service offline. Start the reputation API to see leaderboard.</div>';
+  }
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────────────
+function setExample(addr) {
+  document.getElementById('addressInput').value = addr;
+}
+
+function showError(msg) {
+  const toast = document.getElementById('errorToast');
+  document.getElementById('errorMsg').textContent = msg;
+  toast.classList.remove('hidden');
+  setTimeout(() => toast.classList.add('hidden'), 4000);
+}
+
+// Enter key support
+document.getElementById('addressInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') lookupAddress();
+});
+
+// Load leaderboard on page load
+loadLeaderboard();
+</script>
+</body>
+</html>
