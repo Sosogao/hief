@@ -88,8 +88,10 @@ export function runReputationAwareRules(
 
   // ── R_DAILY_LIMIT: check daily volume against tier limit ─────────────────
   // Note: in production this would query the Intent Bus for daily volume.
-  // Here we check the current intent's input amount as a proxy.
-  const inputAmountUsd = parseFloat(intent.meta?.inputAmountUsd ?? '0');
+  // Here we use uiHints.inputAmountUsd if provided, otherwise 0 (no limit check).
+  const inputAmountUsd = parseFloat(
+    (intent.meta?.uiHints?.['inputAmountUsd'] as string | undefined) ?? '0'
+  );
   if (inputAmountUsd > 0 && inputAmountUsd > params.dailyLimitUsd) {
     reputationFindings.push({
       ruleId: 'R_DAILY_LIMIT',

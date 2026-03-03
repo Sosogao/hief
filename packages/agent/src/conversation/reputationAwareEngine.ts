@@ -1,52 +1,46 @@
+/**
+ * HIEF Reputation-Aware Conversation Engine
+ *
+ * Extends ConversationEngine with reputation context injection:
+ *  - Fetches user reputation on session creation
+ *  - Injects tier-specific system prompt suffix
+ *  - Enriches confirmation messages with tier badge and risk warnings
+ *  - Enforces tier-specific slippage defaults when user doesn't specify
+ *
+ * Usage:
+ *   const engine = new ReputationAwareConversationEngine();
+ *   const sessionId = await engine.createReputationSession('0xABC...', 8453);
+ *   const turn = await engine.processMessage(sessionId, 'swap 100 USDC to ETH');
+ */
+
 import OpenAI from 'openai';
-import { IntentParser, ParseResult, ResolvedIntent } from '../parser/intentParser';
-import { resolveToken, formatAmount, getChainName } from '../tools/tokenRegistry';
+import { IntentParser, ParseResult } from '../parser/intentParser';
+import { getChainName } from '../tools/tokenRegistry';
 import { CONFIRMATION_SYSTEM_PROMPT, AMENDMENT_SYSTEM_PROMPT } from '../prompts/systemPrompt';
+import {
+  ReputationAgentAdapter,
+  UserReputationContext,
+  getReputationAgentAdapter,
+} from '../reputation/reputationAgentAdapter';
 import type { HIEFIntent } from '@hief/common';
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// Re-export types from base engine
+export type { ConversationState, Message, ConversationTurn } from './conversationEngine';
+import type { ConversationState, Message, ConversationTurn, ConversationSession } from './conversationEngine';
 
-export type ConversationState =
-  | 'IDLE'
-  | 'AWAITING_CLARIFICATION'
-  | 'AWAITING_CONFIRMATION'
-  | 'CONFIRMED'
-  | 'CANCELLED'
-  | 'ERROR';
-
-export interface Message {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  timestamp: number;
+// Extended session with reputation context
+export interface ReputationSession extends ConversationSession {
+  reputationContext?: UserReputationContext;
 }
 
-export interface ConversationTurn {
-  userMessage: string;
-  agentResponse: string;
-  state: ConversationState;
-  intent?: HIEFIntent;
-  parseResult?: ParseResult;
-}
+// ── Engine ────────────────────────────────────────────────────────────────────
 
-export interface ConversationSession {
-  sessionId: string;
-  state: ConversationState;
-  messages: Message[];
-  currentParseResult?: ParseResult;
-  currentIntent?: HIEFIntent;
-  smartAccount: string;
-  chainId: number;
-  createdAt: number;
-  updatedAt: number;
-}
-
-// ─── ConversationEngine ───────────────────────────────────────────────────────
-
-export class ConversationEngine {
+export class ReputationAwareConversationEngine {
   private parser: IntentParser;
   private client: OpenAI;
   private model: string;
-  private sessions: Map<string, ConversationSession> = new Map();
+  private sessions: Map<string, ReputationSession> = new Map();
+  private repAdapter: ReputationAgentAdapter;
 
   constructor(options: {
     apiKey?: string;
@@ -59,35 +53,38 @@ export class ConversationEngine {
       baseURL: process.env.OPENAI_BASE_URL,
     });
     this.model = options.model ?? process.env.OPENAI_MODEL ?? 'gpt-4.1-mini';
+    this.repAdapter = getReputationAgentAdapter();
   }
 
   /**
-   * Create a new conversation session.
+   * Create a session and eagerly fetch reputation context.
    */
-  createSession(smartAccount: string, chainId: number = 8453): string {
-    const sessionId = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  async createReputationSession(smartAccount: string, chainId = 8453): Promise<string> {
+    const sessionId = `rsess_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    // Fetch reputation context (non-blocking fallback to UNKNOWN)
+    const reputationContext = await this.repAdapter.getUserContext(smartAccount);
+
     this.sessions.set(sessionId, {
       sessionId,
       state: 'IDLE',
       messages: [],
       smartAccount,
       chainId,
+      reputationContext,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     });
+
     return sessionId;
   }
 
-  /**
-   * Get a session by ID.
-   */
-  getSession(sessionId: string): ConversationSession | null {
+  getSession(sessionId: string): ReputationSession | null {
     return this.sessions.get(sessionId) ?? null;
   }
 
   /**
-   * Process a user message within a session.
-   * Handles the full state machine: parse → clarify → confirm → execute.
+   * Process a user message with reputation-aware context.
    */
   async processMessage(sessionId: string, userMessage: string): Promise<ConversationTurn> {
     const session = this.sessions.get(sessionId);
@@ -112,7 +109,6 @@ export class ConversationEngine {
 
         case 'CONFIRMED':
         case 'CANCELLED':
-          // Start fresh
           session.state = 'IDLE';
           session.currentParseResult = undefined;
           session.currentIntent = undefined;
@@ -124,7 +120,7 @@ export class ConversationEngine {
           newState = 'IDLE';
       }
     } catch (err: any) {
-      console.error('[CONVERSATION] Error:', err.message);
+      console.error('[REP-ENGINE] Error:', err.message);
       agentResponse = `Sorry, I encountered an error: ${err.message}. Please try again.`;
       newState = 'ERROR';
     }
@@ -141,19 +137,17 @@ export class ConversationEngine {
     };
   }
 
-  // ─── Private: Parse Phase ──────────────────────────────────────────────────
+  // ── Parse Phase ───────────────────────────────────────────────────────────────
 
   private async handleParsePhase(
-    session: ConversationSession,
+    session: ReputationSession,
     userMessage: string
   ): Promise<{ agentResponse: string; newState: ConversationState }> {
 
-    // If we already have a parse result and user is amending it
     if (session.state === 'AWAITING_CLARIFICATION' && session.currentParseResult) {
       return this.handleAmendment(session, userMessage);
     }
 
-    // Fresh parse
     const resolved = await this.parser.parseAndResolve(
       userMessage,
       session.smartAccount,
@@ -162,16 +156,22 @@ export class ConversationEngine {
 
     session.currentParseResult = resolved.parseResult;
 
-    // Case 1: Clarification needed
+    // Apply tier-specific slippage default if not specified by user
+    const ctx = session.reputationContext;
+    if (ctx && resolved.parseResult.params && !resolved.parseResult.params.slippageBps) {
+      // Default slippage: half of tier max, capped at reasonable defaults
+      const defaultSlippage = Math.min(ctx.maxSlippageBps / 2, 50); // max 0.5% default
+      resolved.parseResult.params.slippageBps = defaultSlippage;
+    }
+
     if (resolved.parseResult.clarificationNeeded) {
       return {
         agentResponse: resolved.parseResult.clarificationQuestion ??
-          'Could you please provide more details about your transaction?',
+          'Could you please provide more details?',
         newState: 'AWAITING_CLARIFICATION',
       };
     }
 
-    // Case 2: Resolve errors
     if (resolved.resolveErrors.length > 0) {
       return {
         agentResponse: resolved.resolveErrors.join('\n'),
@@ -179,18 +179,15 @@ export class ConversationEngine {
       };
     }
 
-    // Case 3: Intent resolved — ask for confirmation
     if (resolved.hief) {
       session.currentIntent = resolved.hief;
       const confirmMsg = await this.buildConfirmationMessage(
         resolved.hief,
         resolved.parseResult,
-        session.chainId
+        session.chainId,
+        session.reputationContext
       );
-      return {
-        agentResponse: confirmMsg,
-        newState: 'AWAITING_CONFIRMATION',
-      };
+      return { agentResponse: confirmMsg, newState: 'AWAITING_CONFIRMATION' };
     }
 
     return {
@@ -199,13 +196,12 @@ export class ConversationEngine {
     };
   }
 
-  // ─── Private: Amendment Phase ──────────────────────────────────────────────
+  // ── Amendment Phase ───────────────────────────────────────────────────────────
 
   private async handleAmendment(
-    session: ConversationSession,
+    session: ReputationSession,
     userMessage: string
   ): Promise<{ agentResponse: string; newState: ConversationState }> {
-    // Build context for the amendment
     const context = JSON.stringify(session.currentParseResult?.params ?? {});
 
     const completion = await this.client.chat.completions.create({
@@ -235,7 +231,6 @@ export class ConversationEngine {
       };
     }
 
-    // Apply updates to current parse result
     if (session.currentParseResult && amendResult.updates) {
       session.currentParseResult.params = {
         ...session.currentParseResult.params,
@@ -245,7 +240,6 @@ export class ConversationEngine {
       session.currentParseResult.clarificationNeeded = false;
     }
 
-    // Re-resolve with updated params
     const updatedMessage = this.buildUpdatedMessage(session.currentParseResult!);
     const resolved = await this.parser.parseAndResolve(
       updatedMessage,
@@ -258,7 +252,8 @@ export class ConversationEngine {
       const confirmMsg = await this.buildConfirmationMessage(
         resolved.hief,
         resolved.parseResult,
-        session.chainId
+        session.chainId,
+        session.reputationContext
       );
       return { agentResponse: confirmMsg, newState: 'AWAITING_CONFIRMATION' };
     }
@@ -269,15 +264,14 @@ export class ConversationEngine {
     };
   }
 
-  // ─── Private: Confirmation Phase ──────────────────────────────────────────
+  // ── Confirmation Phase ────────────────────────────────────────────────────────
 
   private async handleConfirmationPhase(
-    session: ConversationSession,
+    session: ReputationSession,
     userMessage: string
   ): Promise<{ agentResponse: string; newState: ConversationState }> {
     const msg = userMessage.trim().toLowerCase();
 
-    // Detect confirmation
     const confirmWords = ['yes', 'y', 'confirm', 'ok', 'okay', 'sure', 'go', 'proceed',
       '确认', '是', '好', '确定', '执行', '对', '没错', '继续'];
     const cancelWords = ['no', 'n', 'cancel', 'stop', 'abort', 'nope',
@@ -287,7 +281,7 @@ export class ConversationEngine {
 
     if (confirmWords.some((w) => msg === w || msg.startsWith(w + ' '))) {
       return {
-        agentResponse: this.buildExecutionMessage(session.currentIntent!, session.chainId),
+        agentResponse: this.buildExecutionMessage(session.currentIntent!, session.reputationContext),
         newState: 'CONFIRMED',
       };
     }
@@ -306,52 +300,62 @@ export class ConversationEngine {
       return this.handleAmendment(session, userMessage);
     }
 
-    // Ambiguous — re-ask
     return {
-      agentResponse: 'Please reply **yes** to confirm or **no** to cancel. You can also describe changes you\'d like to make.',
+      agentResponse: 'Please reply **yes** to confirm or **no** to cancel.',
       newState: 'AWAITING_CONFIRMATION',
     };
   }
 
-  // ─── Private: Message builders ────────────────────────────────────────────
+  // ── Message builders ──────────────────────────────────────────────────────────
 
   private async buildConfirmationMessage(
     intent: HIEFIntent,
     parseResult: ParseResult,
-    chainId: number
+    chainId: number,
+    ctx?: UserReputationContext
   ): Promise<string> {
     const uiHints = (intent.meta?.uiHints ?? {}) as Record<string, string>;
     const inputSymbol = uiHints.inputTokenSymbol ?? intent.input.token.slice(0, 8);
     const outputSymbol = uiHints.outputTokenSymbol ?? intent.outputs[0]?.token.slice(0, 8);
     const inputAmountHuman = uiHints.inputAmountHuman ?? intent.input.amount;
     const chain = getChainName(chainId);
-    const slippage = ((intent.constraints.slippageBps ?? 50) / 100).toFixed(2);
-    const deadline = new Date(intent.deadline * 1000).toLocaleTimeString();
+    const slippage = (intent.constraints.slippageBps / 100).toFixed(2);
 
-    // Use LLM for natural language confirmation if available
+    // Build reputation-aware system prompt
+    const repSuffix = ctx ? this.repAdapter.buildSystemPromptSuffix(ctx) : '';
+    const systemPrompt = CONFIRMATION_SYSTEM_PROMPT + repSuffix;
+
+    // Build reputation header for confirmation
+    const repHeader = ctx ? `\n${this.repAdapter.buildConfirmationHeader(ctx)}\n` : '';
+
     try {
       const completion = await this.client.chat.completions.create({
         model: this.model,
         temperature: 0.3,
         messages: [
-          { role: 'system', content: CONFIRMATION_SYSTEM_PROMPT },
+          { role: 'system', content: systemPrompt },
           {
             role: 'user',
             content: `Original request: "${parseResult.rawIntent ?? intent.meta?.userIntentText}"
 Transaction details:
 - Action: ${parseResult.intentType}
 - Sell: ${inputAmountHuman} ${inputSymbol}
-- Buy: ${outputSymbol} (min: ${intent.outputs[0]?.minAmount === '0' ? 'market rate' : intent.outputs[0]?.minAmount})
+- Buy: ${outputSymbol}
 - Slippage tolerance: ${slippage}%
 - Network: ${chain}
-- Deadline: ${deadline}
-- Protocol: ${(intent.meta as any)?.protocol ?? 'best available (CoW Protocol)'}`,
+- User tier: ${ctx?.tier ?? 'UNKNOWN'} (score: ${ctx?.score ?? 0})
+- Daily limit: $${ctx?.dailyLimitUsd?.toLocaleString() ?? '500'}
+${repHeader}`,
           },
         ],
       });
-      return completion.choices[0]?.message?.content ?? this.buildFallbackConfirmation(intent, inputSymbol, outputSymbol, inputAmountHuman, slippage, chain);
+      return completion.choices[0]?.message?.content ?? this.buildFallbackConfirmation(
+        intent, inputSymbol, outputSymbol, inputAmountHuman, slippage, chain, ctx
+      );
     } catch {
-      return this.buildFallbackConfirmation(intent, inputSymbol, outputSymbol, inputAmountHuman, slippage, chain);
+      return this.buildFallbackConfirmation(
+        intent, inputSymbol, outputSymbol, inputAmountHuman, slippage, chain, ctx
+      );
     }
   }
 
@@ -361,9 +365,14 @@ Transaction details:
     outputSymbol: string,
     inputAmountHuman: string,
     slippage: string,
-    chain: string
+    chain: string,
+    ctx?: UserReputationContext
   ): string {
+    const tierLine = ctx ? `\n${ctx.tierBadge} | Score: ${ctx.score} | Daily limit: $${ctx.dailyLimitUsd.toLocaleString()}` : '';
+    const warnings = ctx?.riskWarnings.map((w) => `\n⚠️ ${w}`).join('') ?? '';
+
     return `📋 **Transaction Summary**
+${tierLine}${warnings}
 
 🔄 Swap **${inputAmountHuman} ${inputSymbol}** → **${outputSymbol}**
 🌐 Network: ${chain}
@@ -373,15 +382,17 @@ Transaction details:
 Reply **yes** to confirm or **no** to cancel.`;
   }
 
-  private buildExecutionMessage(intent: HIEFIntent, chainId: number): string {
-    const uiHints2 = (intent.meta?.uiHints ?? {}) as Record<string, string>;
-    const inputSymbol = uiHints2.inputTokenSymbol ?? 'tokens';
-    const outputSymbol = uiHints2.outputTokenSymbol ?? 'tokens';
-    const inputAmountHuman = uiHints2.inputAmountHuman ?? intent.input.amount;
+  private buildExecutionMessage(intent: HIEFIntent, ctx?: UserReputationContext): string {
+    const uiHints = (intent.meta?.uiHints ?? {}) as Record<string, string>;
+    const inputSymbol = uiHints.inputTokenSymbol ?? 'tokens';
+    const outputSymbol = uiHints.outputTokenSymbol ?? 'tokens';
+    const inputAmountHuman = uiHints.inputAmountHuman ?? intent.input.amount;
+    const tierLine = ctx ? `\n${ctx.tierBadge} | Score: ${ctx.score}` : '';
 
     return `✅ **Intent confirmed!**
+${tierLine}
 
-Your intent has been created and submitted to the HIEF network:
+Your intent has been submitted to the HIEF network:
 - **Intent ID**: \`${intent.intentId.slice(0, 16)}...\`
 - **Action**: Swap ${inputAmountHuman} ${inputSymbol} → ${outputSymbol}
 - **Status**: Seeking best execution via CoW Protocol...

@@ -2,6 +2,8 @@ import type { HIEFIntent, HIEFSolution, HIEFPolicyResult, PolicyFinding, Executi
 import { computeIntentHash } from '@hief/common';
 import { runStaticRules } from '../rules/staticRules';
 import { runL4Simulation } from '../simulation/forkSimulator';
+import { getReputationPolicyAdapter, DynamicPolicyParams } from '../reputation/reputationPolicyAdapter';
+import { runReputationAwareRules } from '../reputation/reputationAwareRules';
 
 function makeResult(
   intent: HIEFIntent,
@@ -9,7 +11,8 @@ function makeResult(
   status: HIEFPolicyResult['status'],
   findings: PolicyFinding[],
   summary: string[],
-  executionDiff?: ExecutionDiff
+  executionDiff?: ExecutionDiff,
+  reputationContext?: { tier: string; score: number; appliedParams: DynamicPolicyParams }
 ): HIEFPolicyResult {
   return {
     policyResultVersion: '0.1',
@@ -21,45 +24,19 @@ function makeResult(
     riskTags: findings.filter((f) => f.severity === 'CRITICAL').map((f) => f.ruleId),
     summary,
     executionDiff,
+    reputationContext,
     timestamp: Math.floor(Date.now() / 1000),
-  };
+  } as HIEFPolicyResult & { reputationContext?: unknown };
 }
 
-export async function validateSolution(
-  intent: HIEFIntent,
-  solution: HIEFSolution
-): Promise<HIEFPolicyResult> {
-  const findings: PolicyFinding[] = [];
-  const summary: string[] = [];
+// ── Shared L4 simulation helper ───────────────────────────────────────────────
 
-  // ── Phase 1: Static Rules ─────────────────────────────────────────────
-  const { results: ruleResults, hasCriticalFailure, hasHighFailure } = runStaticRules(intent, solution);
-
-  for (const result of ruleResults) {
-    if (!result.passed && result.finding) {
-      // Map to PolicyFinding (without 'field' which is not in the type)
-      const finding: PolicyFinding = {
-        ruleId: result.finding.ruleId,
-        severity: result.finding.severity,
-        message: result.finding.message,
-        evidence: result.finding.field ? { field: result.finding.field } : undefined,
-      };
-      findings.push(finding);
-    }
-  }
-
-  // If critical rules fail, return immediately without simulation
-  if (hasCriticalFailure) {
-    const criticalFindings = findings.filter((f) => f.severity === 'CRITICAL');
-    summary.push(`❌ FAIL: ${criticalFindings.length} critical rule(s) violated`);
-    criticalFindings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
-    return makeResult(intent, solution, 'FAIL', findings, summary);
-  }
-
-  // ── Phase 2: Fork Simulation ──────────────────────────────────────────
-  let executionDiff: ExecutionDiff | undefined;
+async function runL4(
+  solution: HIEFSolution,
+  findings: PolicyFinding[],
+  summary: string[]
+): Promise<boolean> {
   let simFailed = false;
-
   try {
     const simResult = await runL4Simulation(solution);
 
@@ -74,16 +51,13 @@ export async function validateSolution(
         });
       }
       summary.push(`❌ FAIL: L4 simulation found ${simResult.findings.length} violation(s)`);
-      return makeResult(intent, solution, 'FAIL', findings, summary);
     } else if (simResult.status === 'SKIP') {
-      // Graceful degradation — Tenderly not configured
       findings.push({
         ruleId: 'SIM-00',
         severity: 'LOW',
-        message: simResult.findings[0]?.message ?? 'L4 simulation skipped',
+        message: simResult.findings[0]?.message ?? 'L4 simulation skipped (Tenderly not configured)',
       });
     }
-    // PASS — no simulation findings to add
   } catch (err: any) {
     console.error('[POLICY] Simulation error:', err.message);
     findings.push({
@@ -92,19 +66,49 @@ export async function validateSolution(
       message: `Fork simulation unavailable: ${err.message}`,
     });
   }
+  return simFailed;
+}
 
-  // ── Determine Final Status ────────────────────────────────────────────
+// ── Standard validation (no reputation context) ───────────────────────────────
+
+export async function validateSolution(
+  intent: HIEFIntent,
+  solution: HIEFSolution
+): Promise<HIEFPolicyResult> {
+  const findings: PolicyFinding[] = [];
+  const summary: string[] = [];
+
+  // Phase 1: Static Rules
+  const { results: ruleResults, hasCriticalFailure, hasHighFailure } = runStaticRules(intent, solution);
+
+  for (const result of ruleResults) {
+    if (!result.passed && result.finding) {
+      findings.push({
+        ruleId: result.finding.ruleId,
+        severity: result.finding.severity,
+        message: result.finding.message,
+        evidence: result.finding.field ? { field: result.finding.field } : undefined,
+      });
+    }
+  }
+
+  if (hasCriticalFailure) {
+    const criticalFindings = findings.filter((f) => f.severity === 'CRITICAL');
+    summary.push(`❌ FAIL: ${criticalFindings.length} critical rule(s) violated`);
+    criticalFindings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+    return makeResult(intent, solution, 'FAIL', findings, summary);
+  }
+
+  // Phase 2: Fork Simulation
+  const simFailed = await runL4(solution, findings, summary);
+  if (simFailed) {
+    return makeResult(intent, solution, 'FAIL', findings, summary);
+  }
+
+  // Determine final status
   const hasAnyFailure = hasCriticalFailure || hasHighFailure || simFailed;
   const hasMediumWarnings = findings.some((f) => f.severity === 'MEDIUM');
-
-  let status: HIEFPolicyResult['status'];
-  if (hasAnyFailure) {
-    status = 'FAIL';
-  } else if (hasMediumWarnings) {
-    status = 'WARN';
-  } else {
-    status = 'PASS';
-  }
+  const status: HIEFPolicyResult['status'] = hasAnyFailure ? 'FAIL' : hasMediumWarnings ? 'WARN' : 'PASS';
 
   if (status === 'PASS') {
     summary.push(`✅ PASS: All ${ruleResults.length} rules passed`);
@@ -119,8 +123,113 @@ export async function validateSolution(
     findings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
   }
 
-  return makeResult(intent, solution, status, findings, summary, executionDiff);
+  return makeResult(intent, solution, status, findings, summary);
 }
+
+// ── Reputation-Aware validation ───────────────────────────────────────────────
+
+/**
+ * Validate a solution with dynamic per-user policy parameters derived
+ * from the user's reputation tier.
+ *
+ * Key differences from validateSolution():
+ *  - R4 (fee cap) and R5 (slippage cap) thresholds are adjusted per tier
+ *  - R_DAILY_LIMIT is enforced based on tier
+ *  - Risk warnings are surfaced as LOW findings
+ *  - reputationContext is attached to the result for transparency
+ *
+ * Security rules (R1, R2, R6, R7, R10, R11, R12) are NEVER relaxed.
+ */
+export async function validateSolutionWithReputation(
+  intent: HIEFIntent,
+  solution: HIEFSolution,
+  userAddress: string
+): Promise<HIEFPolicyResult> {
+  const findings: PolicyFinding[] = [];
+  const summary: string[] = [];
+
+  // Fetch reputation params (graceful degradation to UNKNOWN tier)
+  const adapter = getReputationPolicyAdapter();
+  const params = await adapter.getPolicyParams(userAddress);
+
+  summary.push(`[REP] User ${userAddress.slice(0, 8)}... | Tier: ${params.tier} | Score: ${params.score}`);
+  summary.push(`[REP] Applied limits — Slippage: ${params.maxSlippageBps}bps | Fee: ${params.maxFeeBps}bps | Daily: $${params.dailyLimitUsd.toLocaleString()}`);
+
+  // Phase 1: Reputation-Aware Static Rules
+  const {
+    results: ruleResults,
+    reputationFindings,
+    hasCriticalFailure,
+    hasHighFailure,
+    appliedParams,
+  } = runReputationAwareRules(intent, solution, params);
+
+  for (const result of ruleResults) {
+    if (!result.passed && result.finding) {
+      findings.push({
+        ruleId: result.finding.ruleId,
+        severity: result.finding.severity,
+        message: result.finding.message,
+        evidence: result.finding.field ? { field: result.finding.field } : undefined,
+      });
+    }
+  }
+
+  // Add reputation-specific findings (daily limit, risk warnings)
+  findings.push(...reputationFindings);
+
+  if (hasCriticalFailure) {
+    const criticalFindings = findings.filter((f) => f.severity === 'CRITICAL');
+    summary.push(`❌ FAIL: ${criticalFindings.length} critical rule(s) violated`);
+    criticalFindings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+    return makeResult(intent, solution, 'FAIL', findings, summary, undefined, {
+      tier: params.tier,
+      score: params.score,
+      appliedParams,
+    });
+  }
+
+  // Phase 2: Fork Simulation (skip if tier allows and no high failures)
+  let simFailed = false;
+  if (params.requireSimulation || hasHighFailure) {
+    simFailed = await runL4(solution, findings, summary);
+    if (simFailed) {
+      return makeResult(intent, solution, 'FAIL', findings, summary, undefined, {
+        tier: params.tier,
+        score: params.score,
+        appliedParams,
+      });
+    }
+  } else {
+    summary.push(`[REP] L4 simulation skipped for ${params.tier} tier (score: ${params.score})`);
+  }
+
+  // Determine final status
+  const hasAnyFailure = hasCriticalFailure || hasHighFailure || simFailed;
+  const hasMediumWarnings = findings.some((f) => f.severity === 'MEDIUM');
+  const status: HIEFPolicyResult['status'] = hasAnyFailure ? 'FAIL' : hasMediumWarnings ? 'WARN' : 'PASS';
+
+  if (status === 'PASS') {
+    summary.push(`✅ PASS: All rules passed (${params.tier} tier policy applied)`);
+    summary.push(`Swap ${intent.input.amount} ${intent.input.token} → min ${intent.outputs[0]?.minAmount} ${intent.outputs[0]?.token}`);
+    summary.push(`Expected output: ${solution.quote.expectedOut}`);
+    summary.push(`Fee: ${solution.quote.fee}`);
+  } else if (status === 'WARN') {
+    summary.push(`⚠️ WARN: ${findings.filter((f) => f.severity !== 'LOW').length} warning(s) found`);
+    findings.filter((f) => f.severity !== 'LOW').forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+  } else {
+    summary.push(`❌ FAIL: ${findings.filter((f) => ['CRITICAL', 'HIGH'].includes(f.severity)).length} issue(s) found`);
+    findings.filter((f) => ['CRITICAL', 'HIGH'].includes(f.severity)).forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+  }
+
+  return makeResult(intent, solution, status, findings, summary, undefined, {
+    tier: params.tier,
+    score: params.score,
+    appliedParams,
+  });
+}
+
+// ── Intent pre-validation ─────────────────────────────────────────────────────
 
 export async function validateIntent(
   intent: HIEFIntent

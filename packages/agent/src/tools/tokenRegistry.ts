@@ -126,7 +126,53 @@ const MAINNET_TOKENS: TokenInfo[] = [
   },
 ];
 
-const ALL_TOKENS = [...BASE_TOKENS, ...MAINNET_TOKENS];
+// ─── Tenderly Virtual Testnet / Base Sepolia fork (chainId: 99917) ─────────────
+// Token addresses mirror Base Sepolia (same contract addresses as Base mainnet for standard tokens)
+const TENDERLY_TOKENS: TokenInfo[] = [
+  {
+    symbol: 'ETH',
+    name: 'Ether',
+    address: '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
+    decimals: 18,
+    chainId: 99917,
+    aliases: ['eth', 'ether', '以太', '以太坊', '以太币'],
+  },
+  {
+    symbol: 'WETH',
+    name: 'Wrapped Ether',
+    address: '0x4200000000000000000000000000000000000006',
+    decimals: 18,
+    chainId: 99917,
+    aliases: ['weth', 'wrapped eth', 'wrapped ether'],
+  },
+  {
+    symbol: 'USDC',
+    name: 'USD Coin',
+    // Base Sepolia USDC address
+    address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+    decimals: 6,
+    chainId: 99917,
+    aliases: ['usdc', 'usd coin', '美元稳定币', 'u', 'usdc.e'],
+  },
+  {
+    symbol: 'USDT',
+    name: 'Tether USD',
+    address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+    decimals: 6,
+    chainId: 99917,
+    aliases: ['usdt', 'tether', '泰达币', '泰达'],
+  },
+  {
+    symbol: 'DAI',
+    name: 'Dai Stablecoin',
+    address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb',
+    decimals: 18,
+    chainId: 99917,
+    aliases: ['dai', 'dai stablecoin'],
+  },
+];
+
+const ALL_TOKENS = [...BASE_TOKENS, ...MAINNET_TOKENS, ...TENDERLY_TOKENS];
 
 /**
  * Resolve a token symbol/alias to its TokenInfo for a given chain.
@@ -188,6 +234,7 @@ export function getChainName(chainId: number): string {
     8453: 'Base',
     84532: 'Base Sepolia',
     31337: 'Localhost',
+    99917: 'Tenderly Virtual Testnet (Base Sepolia fork)',
   };
   return names[chainId] ?? `Chain ${chainId}`;
 }
