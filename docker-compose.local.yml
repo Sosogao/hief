@@ -1,0 +1,43 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local development overrides for docker-compose.yml
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up
+#
+# Differences from production:
+#   - Uses mock/stub values for API keys
+#   - Mounts source for hot-reload (where applicable)
+#   - Disables chain sync (no real RPC needed)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  agent:
+    environment:
+      OPENAI_API_KEY: "sk-mock-local-development"
+      OPENAI_MODEL: "gpt-4o-mini"
+      # In local mode, agent uses mock LLM responses for testing
+      MOCK_LLM: "true"
+
+  bus:
+    environment:
+      CHAIN_ID: "31337"   # Anvil local chain
+
+  reputation:
+    environment:
+      CHAIN_ID: "31337"
+      RPC_URL: ""          # No chain sync in local mode
+      REPUTATION_NFT_ADDRESS: ""
+      UPDATER_PRIVATE_KEY: ""
+
+  policy:
+    environment:
+      CHAIN_ID: "31337"
+      RPC_URL: ""
+      TENDERLY_API_KEY: ""  # Fork simulation disabled in local mode
+
+  solver:
+    environment:
+      CHAIN_ID: "31337"
+      COW_API_URL: "https://api.cow.fi/sepolia"
+      SAFE_SIGNER_PRIVATE_KEY: ""

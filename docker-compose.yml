@@ -1,0 +1,180 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HIEF — Hybrid Intent Execution Framework
+# Docker Compose Stack (MVP)
+#
+# Services:
+#   agent        — AI Agent (NL → Intent)         :3000
+#   bus          — Intent Bus (state machine)      :3001
+#   reputation   — Reputation API                  :3002
+#   policy       — Policy Engine                   :3003
+#   solver       — Solver (CoW adapter)            :3004
+#   explorer     — Intent Explorer (static HTML)   :8080
+#
+# Usage:
+#   cp .env.example .env   # fill in your keys
+#   docker compose up -d
+# ─────────────────────────────────────────────────────────────────────────────
+
+networks:
+  hief-net:
+    driver: bridge
+
+volumes:
+  bus-data:
+  reputation-data:
+
+services:
+
+  # ── Agent ──────────────────────────────────────────────────────────────────
+  agent:
+    build:
+      context: .
+      dockerfile: packages/agent/Dockerfile
+    container_name: hief-agent
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: "3000"
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      BUS_URL: http://bus:3001
+      CHAIN_ID: ${CHAIN_ID:-84532}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      bus:
+        condition: service_healthy
+    networks:
+      - hief-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Intent Bus ─────────────────────────────────────────────────────────────
+  bus:
+    build:
+      context: .
+      dockerfile: packages/bus/Dockerfile
+    container_name: hief-bus
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      DB_PATH: /data/bus.db
+      POLICY_URL: http://policy:3003
+      SAFE_URL: ${SAFE_URL:-}
+      CHAIN_ID: ${CHAIN_ID:-84532}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - bus-data:/data
+    networks:
+      - hief-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ── Reputation API ─────────────────────────────────────────────────────────
+  reputation:
+    build:
+      context: .
+      dockerfile: packages/reputation/Dockerfile
+    container_name: hief-reputation
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      PORT: "3002"
+      DB_PATH: /data/reputation.db
+      CHAIN_ID: ${CHAIN_ID:-84532}
+      RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      REPUTATION_NFT_ADDRESS: ${REPUTATION_NFT_ADDRESS:-}
+      UPDATER_PRIVATE_KEY: ${UPDATER_PRIVATE_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - reputation-data:/data
+    networks:
+      - hief-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3002/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Policy Engine ──────────────────────────────────────────────────────────
+  policy:
+    build:
+      context: .
+      dockerfile: packages/policy/Dockerfile
+    container_name: hief-policy
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    environment:
+      PORT: "3003"
+      CHAIN_ID: ${CHAIN_ID:-84532}
+      RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      TENDERLY_API_KEY: ${TENDERLY_API_KEY:-}
+      TENDERLY_ACCOUNT: ${TENDERLY_ACCOUNT:-}
+      TENDERLY_PROJECT: ${TENDERLY_PROJECT:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    networks:
+      - hief-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3003/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Solver ─────────────────────────────────────────────────────────────────
+  solver:
+    build:
+      context: .
+      dockerfile: packages/solver/Dockerfile
+    container_name: hief-solver
+    restart: unless-stopped
+    ports:
+      - "3004:3004"
+    environment:
+      PORT: "3004"
+      BUS_URL: http://bus:3001
+      CHAIN_ID: ${CHAIN_ID:-84532}
+      COW_API_URL: ${COW_API_URL:-https://api.cow.fi/sepolia}
+      SAFE_SIGNER_PRIVATE_KEY: ${SAFE_SIGNER_PRIVATE_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    depends_on:
+      bus:
+        condition: service_healthy
+    networks:
+      - hief-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3004/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  # ── Intent Explorer (static) ───────────────────────────────────────────────
+  explorer:
+    image: nginx:alpine
+    container_name: hief-explorer
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./apps/explorer:/usr/share/nginx/html:ro
+      - ./deploy/nginx/explorer.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - hief-net
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
