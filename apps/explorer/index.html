@@ -7,475 +7,431 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
-    :root {
-      --accent: #6366f1;
-      --accent-dark: #4f46e5;
-    }
-    body { background: #0f0f1a; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
-    .glass {
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.08);
-      backdrop-filter: blur(12px);
-    }
+    :root { --accent: #6366f1; }
+    body { background: #0a0a14; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; }
+    .glass { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(12px); }
+    .glass-hover:hover { background: rgba(255,255,255,0.07); transition: background 0.2s; }
     .tier-UNKNOWN  { background:#374151; color:#9ca3af; }
     .tier-LOW      { background:#1e3a5f; color:#60a5fa; }
     .tier-STANDARD { background:#1a3a2a; color:#4ade80; }
     .tier-TRUSTED  { background:#3b2a1a; color:#fb923c; }
     .tier-ELITE    { background:#2d1a3a; color:#c084fc; }
-    .score-ring {
-      width: 160px; height: 160px;
-      border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      position: relative;
-    }
-    .score-ring canvas { position: absolute; top: 0; left: 0; }
-    .score-ring .inner { z-index: 1; text-align: center; }
-    .tag-pill {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 9999px;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      background: rgba(99,102,241,0.15);
-      border: 1px solid rgba(99,102,241,0.3);
-      color: #a5b4fc;
-    }
-    input:focus { outline: none; box-shadow: 0 0 0 2px rgba(99,102,241,0.5); }
-    .animate-pulse-slow { animation: pulse 2s cubic-bezier(0.4,0,0.6,1) infinite; }
-    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
-    .skeleton { background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; }
+    .status-BROADCAST { color:#60a5fa; }
+    .status-SELECTED  { color:#a78bfa; }
+    .status-EXECUTED  { color:#4ade80; }
+    .status-FAILED    { color:#f87171; }
+    .status-CANCELLED { color:#6b7280; }
+    .score-ring { width:160px; height:160px; border-radius:50%; display:flex; align-items:center; justify-content:center; position:relative; }
+    .score-ring canvas { position:absolute; top:0; left:0; }
+    .score-ring .inner { z-index:1; text-align:center; }
+    .tag-pill { display:inline-block; padding:2px 10px; border-radius:9999px; font-size:11px; font-weight:600; background:rgba(99,102,241,0.15); border:1px solid rgba(99,102,241,0.3); color:#a5b4fc; }
+    input:focus { outline:none; box-shadow:0 0 0 2px rgba(99,102,241,0.5); }
+    .skeleton { background:linear-gradient(90deg,rgba(255,255,255,0.05) 25%,rgba(255,255,255,0.1) 50%,rgba(255,255,255,0.05) 75%); background-size:200% 100%; animation:shimmer 1.5s infinite; }
     @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+    .tab-active { background:rgba(99,102,241,0.2); color:#a5b4fc; border-color:rgba(99,102,241,0.5); }
+    .tab-inactive { color:#64748b; border-color:transparent; }
+    .tab-inactive:hover { color:#94a3b8; }
+    .dot-live { width:8px; height:8px; border-radius:50%; background:#4ade80; animation:pulse-dot 2s infinite; display:inline-block; }
+    @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
+    ::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
   </style>
 </head>
 <body class="min-h-screen">
 
-  <!-- Header -->
-  <header class="border-b border-white/5 px-6 py-4 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold text-sm">H</div>
-      <span class="font-semibold text-white">HIEF Intent Explorer</span>
-      <span class="text-xs text-slate-500 ml-1">Reputation Layer v0.1</span>
-    </div>
-    <div class="flex items-center gap-2">
-      <span id="networkBadge" class="text-xs px-2 py-1 rounded-full bg-emerald-900/50 text-emerald-400 border border-emerald-700/50">● Base Mainnet</span>
-    </div>
-  </header>
+<header class="border-b border-white/5 px-6 py-4 flex items-center justify-between sticky top-0 z-50" style="background:#0a0a14cc;backdrop-filter:blur(20px)">
+  <div class="flex items-center gap-3">
+    <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold text-sm">H</div>
+    <span class="font-semibold text-white">HIEF Intent Explorer</span>
+    <span class="text-xs text-slate-500 ml-1">v0.1</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <span class="dot-live"></span>
+    <span class="text-xs text-slate-400">Live</span>
+    <span class="text-xs px-2 py-1 rounded-full bg-violet-900/50 text-violet-400 border border-violet-700/50">Tenderly Testnet (99917)</span>
+  </div>
+</header>
 
-  <!-- Search Bar -->
-  <div class="max-w-3xl mx-auto px-4 mt-12 mb-8">
-    <h1 class="text-3xl font-bold text-white mb-2 text-center">Intent Reputation Explorer</h1>
-    <p class="text-slate-400 text-center mb-8 text-sm">Look up any address's HIEF reputation score, behavior tags, and execution history.</p>
-    <div class="flex gap-2">
-      <input
-        id="addressInput"
-        type="text"
-        placeholder="Enter wallet address (0x...)"
-        class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm transition-all"
-      />
-      <button
-        id="searchBtn"
-        onclick="lookupAddress()"
-        class="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm transition-colors"
-      >
-        Search
-      </button>
-    </div>
-    <div class="flex gap-2 mt-3 flex-wrap">
-      <span class="text-xs text-slate-500">Try examples:</span>
-      <button onclick="setExample('0xaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaAaA')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Elite Trader</button>
-      <button onclick="setExample('0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">New User</button>
-    </div>
+<div class="border-b border-white/5 px-6 py-3 grid grid-cols-2 md:grid-cols-5 gap-4">
+  <div class="text-center"><div class="text-xs text-slate-500 mb-1">Total Intents</div><div class="text-lg font-bold text-white skeleton h-6 rounded" id="statTotalIntents">-</div></div>
+  <div class="text-center"><div class="text-xs text-slate-500 mb-1">Active Addresses</div><div class="text-lg font-bold text-white skeleton h-6 rounded" id="statAddresses">-</div></div>
+  <div class="text-center"><div class="text-xs text-slate-500 mb-1">Solutions</div><div class="text-lg font-bold text-white skeleton h-6 rounded" id="statSolutions">-</div></div>
+  <div class="text-center"><div class="text-xs text-slate-500 mb-1">Success Rate</div><div class="text-lg font-bold text-white skeleton h-6 rounded" id="statSuccessRate">-</div></div>
+  <div class="text-center"><div class="text-xs text-slate-500 mb-1">Chain ID</div><div class="text-lg font-bold text-violet-400" id="statChainId">99917</div></div>
+</div>
+
+<div class="max-w-7xl mx-auto px-4 py-8">
+  <div class="flex gap-1 mb-6 border-b border-white/5">
+    <button onclick="switchTab('search')" id="tab-search" class="tab-active px-4 py-2 text-sm font-medium border-b-2 transition-colors">Address Lookup</button>
+    <button onclick="switchTab('intents')" id="tab-intents" class="tab-inactive px-4 py-2 text-sm font-medium border-b-2 transition-colors">Intent History</button>
+    <button onclick="switchTab('activity')" id="tab-activity" class="tab-inactive px-4 py-2 text-sm font-medium border-b-2 transition-colors">Live Activity</button>
+    <button onclick="switchTab('leaderboard')" id="tab-leaderboard" class="tab-inactive px-4 py-2 text-sm font-medium border-b-2 transition-colors">Leaderboard</button>
   </div>
 
-  <!-- Results Container -->
-  <div id="results" class="max-w-5xl mx-auto px-4 pb-16 hidden">
-
-    <!-- Top Row: Score Ring + Key Metrics -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-
-      <!-- Score Ring Card -->
-      <div class="glass rounded-2xl p-6 flex flex-col items-center justify-center">
-        <div class="score-ring mb-3">
-          <canvas id="scoreRingChart" width="160" height="160"></canvas>
-          <div class="inner">
-            <div id="scoreValue" class="text-4xl font-bold text-white">—</div>
-            <div class="text-xs text-slate-400 mt-1">/ 1000</div>
+  <div id="panel-search">
+    <div class="max-w-3xl mx-auto mb-8">
+      <h1 class="text-2xl font-bold text-white mb-1 text-center">Address Reputation Explorer</h1>
+      <p class="text-slate-400 text-center mb-6 text-sm">Look up any address reputation score, behavior tags, and intent history.</p>
+      <div class="flex gap-2">
+        <input id="addressInput" type="text" placeholder="Enter wallet address (0x...)" class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm" />
+        <button onclick="lookupAddress()" class="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm">Search</button>
+      </div>
+      <div class="flex gap-2 mt-3">
+        <span class="text-xs text-slate-500">Try:</span>
+        <button onclick="setExample('0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Test Wallet</button>
+      </div>
+    </div>
+    <div id="results" class="hidden">
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div class="glass rounded-2xl p-6 flex flex-col items-center justify-center">
+          <div class="score-ring mb-3">
+            <canvas id="scoreRingChart" width="160" height="160"></canvas>
+            <div class="inner"><div id="scoreValue" class="text-4xl font-bold text-white">-</div><div class="text-xs text-slate-400 mt-1">/ 1000</div></div>
           </div>
+          <div id="tierBadge" class="tier-UNKNOWN text-xs font-bold px-3 py-1 rounded-full mb-2">UNKNOWN</div>
+          <div id="addressDisplay" class="text-xs text-slate-500 font-mono text-center break-all"></div>
         </div>
-        <div id="tierBadge" class="tier-UNKNOWN text-xs font-bold px-3 py-1 rounded-full mb-2">UNKNOWN</div>
-        <div id="addressDisplay" class="text-xs text-slate-500 font-mono text-center break-all"></div>
+        <div class="glass rounded-2xl p-6 col-span-2">
+          <h3 class="text-sm font-semibold text-slate-300 mb-4">Score Breakdown</h3>
+          <div class="space-y-3" id="dimensionScores"></div>
+        </div>
       </div>
-
-      <!-- Dimension Scores -->
-      <div class="glass rounded-2xl p-6 col-span-2">
-        <h3 class="text-sm font-semibold text-slate-300 mb-4">Score Breakdown</h3>
-        <div class="space-y-3" id="dimensionScores">
-          <!-- Populated by JS -->
-        </div>
+      <div class="glass rounded-2xl p-5 mb-4">
+        <h3 class="text-sm font-semibold text-slate-300 mb-3">Behavior Tags</h3>
+        <div id="behaviorTags" class="flex flex-wrap gap-2"><span class="text-xs text-slate-500">No tags yet</span></div>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" id="metricsGrid"></div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <div class="glass rounded-2xl p-5"><h3 class="text-sm font-semibold text-slate-300 mb-4">Dimension Radar</h3><div style="height:220px;"><canvas id="radarChart"></canvas></div></div>
+        <div class="glass rounded-2xl p-5"><h3 class="text-sm font-semibold text-slate-300 mb-4">Score History</h3><div style="height:220px;"><canvas id="historyChart"></canvas></div></div>
+      </div>
+      <div class="glass rounded-2xl p-5 mb-4">
+        <h3 class="text-sm font-semibold text-slate-300 mb-4">Intent History for this Address</h3>
+        <div id="addressIntentList"><div class="text-xs text-slate-500 text-center py-4">Loading...</div></div>
+      </div>
+      <div class="glass rounded-2xl p-5">
+        <h3 class="text-sm font-semibold text-slate-300 mb-3">Snapshot Metadata</h3>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs" id="snapshotMeta"></div>
       </div>
     </div>
+  </div>
 
-    <!-- Behavior Tags -->
+  <div id="panel-intents" class="hidden">
+    <div class="glass rounded-2xl p-4 mb-4 flex flex-wrap gap-3 items-center">
+      <select id="intentStatusFilter" onchange="loadIntents()" class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white">
+        <option value="">All Statuses</option>
+        <option value="BROADCAST">BROADCAST</option>
+        <option value="SELECTED">SELECTED</option>
+        <option value="EXECUTED">EXECUTED</option>
+        <option value="FAILED">FAILED</option>
+        <option value="CANCELLED">CANCELLED</option>
+      </select>
+      <input id="intentAddressFilter" type="text" placeholder="Filter by address (0x...)" onkeydown="if(event.key==='Enter')loadIntents()" class="bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 w-72" />
+      <button onclick="loadIntents()" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-sm">Filter</button>
+      <span class="text-xs text-slate-500 ml-auto" id="intentTotal">- intents</span>
+    </div>
+    <div class="glass rounded-2xl overflow-hidden">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-white/5 text-slate-400 text-xs">
+          <th class="text-left px-4 py-3 font-medium">Intent ID</th>
+          <th class="text-left px-4 py-3 font-medium">Address</th>
+          <th class="text-left px-4 py-3 font-medium">Action</th>
+          <th class="text-left px-4 py-3 font-medium">Status</th>
+          <th class="text-right px-4 py-3 font-medium">Time</th>
+        </tr></thead>
+        <tbody id="intentTableBody"><tr><td colspan="5" class="text-center py-8 text-slate-500 text-xs">Loading intents...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="flex justify-between items-center mt-4">
+      <button id="intentPrevBtn" onclick="intentPage(-1)" class="px-4 py-2 glass rounded-lg text-sm text-slate-400 hover:text-white">Prev</button>
+      <span class="text-xs text-slate-500" id="intentPageInfo">Page 1</span>
+      <button id="intentNextBtn" onclick="intentPage(1)" class="px-4 py-2 glass rounded-lg text-sm text-slate-400 hover:text-white">Next</button>
+    </div>
+    <div id="intentDetailPanel" class="hidden mt-4 glass rounded-2xl p-6">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-sm font-semibold text-slate-300">Intent Detail</h3>
+        <button onclick="closeIntentDetail()" class="text-slate-500 hover:text-white text-xs">Close</button>
+      </div>
+      <div id="intentDetailContent"></div>
+    </div>
+  </div>
+
+  <div id="panel-activity" class="hidden">
+    <div class="flex items-center justify-between mb-4">
+      <div class="flex items-center gap-2"><span class="dot-live"></span><span class="text-sm font-semibold text-white">Live Intent Feed</span><span class="text-xs text-slate-500">Auto-refreshes every 10s</span></div>
+      <button onclick="loadActivity()" class="px-3 py-1.5 glass rounded-lg text-xs text-indigo-400 hover:text-indigo-300">Refresh</button>
+    </div>
     <div class="glass rounded-2xl p-5 mb-4">
-      <h3 class="text-sm font-semibold text-slate-300 mb-3">Behavior Tags</h3>
-      <div id="behaviorTags" class="flex flex-wrap gap-2">
-        <span class="text-xs text-slate-500">No tags yet</span>
-      </div>
+      <h3 class="text-sm font-semibold text-slate-300 mb-3">24h Activity</h3>
+      <div style="height:140px;"><canvas id="activityChart"></canvas></div>
     </div>
-
-    <!-- Metrics Grid -->
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" id="metricsGrid">
-      <!-- Populated by JS -->
-    </div>
-
-    <!-- Radar Chart + History -->
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-      <div class="glass rounded-2xl p-5">
-        <h3 class="text-sm font-semibold text-slate-300 mb-4">Dimension Radar</h3>
-        <div style="height:220px;"><canvas id="radarChart"></canvas></div>
-      </div>
-      <div class="glass rounded-2xl p-5">
-        <h3 class="text-sm font-semibold text-slate-300 mb-4">Score History</h3>
-        <div style="height:220px;"><canvas id="historyChart"></canvas></div>
-      </div>
-    </div>
-
-    <!-- Snapshot Metadata -->
-    <div class="glass rounded-2xl p-5">
-      <h3 class="text-sm font-semibold text-slate-300 mb-3">Snapshot Metadata</h3>
-      <div class="grid grid-cols-2 md:grid-cols-3 gap-4 text-xs" id="snapshotMeta">
-        <!-- Populated by JS -->
-      </div>
-    </div>
-
+    <div id="activityFeed" class="space-y-2"><div class="text-xs text-slate-500 text-center py-8">Loading activity...</div></div>
   </div>
 
-  <!-- Leaderboard -->
-  <div class="max-w-5xl mx-auto px-4 pb-16" id="leaderboardSection">
-    <div class="glass rounded-2xl p-6">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="text-sm font-semibold text-slate-300">🏆 Top Reputation Addresses</h3>
-        <button onclick="loadLeaderboard()" class="text-xs text-indigo-400 hover:text-indigo-300">Refresh</button>
-      </div>
-      <div id="leaderboardBody">
-        <div class="text-xs text-slate-500 text-center py-8">Loading leaderboard...</div>
-      </div>
+  <div id="panel-leaderboard" class="hidden">
+    <div class="flex items-center justify-between mb-4">
+      <h2 class="text-lg font-bold text-white">Top Reputation Addresses</h2>
+      <button onclick="loadLeaderboard()" class="px-3 py-1.5 glass rounded-lg text-xs text-indigo-400 hover:text-indigo-300">Refresh</button>
+    </div>
+    <div class="glass rounded-2xl overflow-hidden">
+      <table class="w-full text-sm">
+        <thead><tr class="border-b border-white/5 text-slate-400 text-xs">
+          <th class="text-left px-4 py-3 font-medium">#</th>
+          <th class="text-left px-4 py-3 font-medium">Address</th>
+          <th class="text-left px-4 py-3 font-medium">Tier</th>
+          <th class="text-right px-4 py-3 font-medium">Score</th>
+          <th class="text-right px-4 py-3 font-medium">Intents</th>
+          <th class="text-right px-4 py-3 font-medium">Success Rate</th>
+        </tr></thead>
+        <tbody id="leaderboardBody"><tr><td colspan="6" class="text-center py-8 text-slate-500 text-xs">Loading...</td></tr></tbody>
+      </table>
     </div>
   </div>
+</div>
 
-  <!-- Error Toast -->
-  <div id="errorToast" class="fixed bottom-6 right-6 bg-red-900/90 border border-red-700 text-red-200 text-sm px-4 py-3 rounded-xl hidden max-w-sm">
-    <span id="errorMsg"></span>
-  </div>
+<div id="errorToast" class="fixed bottom-6 right-6 bg-red-900/90 border border-red-700 text-red-200 text-sm px-4 py-3 rounded-xl hidden max-w-sm z-50"><span id="errorMsg"></span></div>
 
 <script>
-// ─── Config ────────────────────────────────────────────────────────────────
-const API_BASE = (window.REPUTATION_API_URL || 'http://localhost:3002');
-const CHAIN_ID = 8453; // Base mainnet
+const EXPLORER_API = (window.EXPLORER_API_URL || 'http://localhost:3006');
+const CHAIN_ID = 99917;
+const TABS = ['search','intents','activity','leaderboard'];
 
-// ─── Charts ────────────────────────────────────────────────────────────────
-let scoreRingChartInstance = null;
-let radarChartInstance = null;
-let historyChartInstance = null;
+function switchTab(name) {
+  TABS.forEach(function(t) {
+    document.getElementById('tab-'+t).className = t===name ? 'tab-active px-4 py-2 text-sm font-medium border-b-2 transition-colors' : 'tab-inactive px-4 py-2 text-sm font-medium border-b-2 transition-colors';
+    document.getElementById('panel-'+t).classList.toggle('hidden', t!==name);
+  });
+  if (name==='intents') loadIntents();
+  if (name==='activity') loadActivity();
+  if (name==='leaderboard') loadLeaderboard();
+}
+
+async function loadStats() {
+  try {
+    var res = await fetch(EXPLORER_API+'/v1/explorer/stats');
+    var json = await res.json();
+    if (!json.success) return;
+    var d = json.data;
+    setText('statTotalIntents', d.intents.total);
+    setText('statAddresses', d.addresses.unique);
+    setText('statSolutions', d.solutions.total);
+    setText('statSuccessRate', d.intents.successRate!=null ? (d.intents.successRate*100).toFixed(1)+'%' : 'N/A');
+    ['statTotalIntents','statAddresses','statSolutions','statSuccessRate'].forEach(function(id) {
+      document.getElementById(id).classList.remove('skeleton','h-6','rounded');
+    });
+  } catch(e) {}
+}
+
+var scoreRingChart, radarChartInst, historyChartInst;
+
+async function lookupAddress() {
+  var raw = document.getElementById('addressInput').value.trim();
+  if (!raw) return;
+  if (!/^0x[0-9a-fA-F]{40}$/.test(raw)) { showError('Invalid Ethereum address format'); return; }
+  document.getElementById('results').classList.remove('hidden');
+  document.getElementById('scoreValue').textContent = '...';
+  document.getElementById('addressDisplay').textContent = raw.slice(0,6)+'...'+raw.slice(-4);
+  try {
+    var res = await fetch(EXPLORER_API+'/v1/explorer/address/'+raw+'?chainId='+CHAIN_ID+'&intentLimit=10');
+    var json = await res.json();
+    if (!res.ok || !json.success) { showError(json.error||'Failed to fetch data'); return; }
+    var data = json.data;
+    var snap = data.reputation;
+    if (snap) {
+      var scores = snap.scores, metrics = snap.metrics;
+      document.getElementById('scoreValue').textContent = Math.round(scores.final);
+      createScoreRing(scores.final);
+      var tierEl = document.getElementById('tierBadge');
+      tierEl.textContent = snap.riskTier;
+      tierEl.className = 'tier-'+snap.riskTier+' text-xs font-bold px-3 py-1 rounded-full mb-2';
+      renderDimensions(scores);
+      renderTags(snap.behaviorTags);
+      renderMetrics(metrics);
+      createRadar(scores);
+      renderMeta(snap);
+      var histRes = await fetch(EXPLORER_API+'/v1/reputation/'+CHAIN_ID+'/'+raw.toLowerCase()+'/history');
+      var histJson = await histRes.json();
+      createHistory(histJson.success ? histJson.data : []);
+    } else {
+      document.getElementById('scoreValue').textContent = '-';
+      document.getElementById('tierBadge').textContent = 'NEW';
+      document.getElementById('dimensionScores').innerHTML = '<p class="text-xs text-slate-500">No reputation data yet.</p>';
+    }
+    renderAddressIntents(data.intents ? data.intents.recent : []);
+  } catch(err) { showError('Explorer API unavailable on port 3006.'); console.error(err); }
+}
+
+function renderAddressIntents(intents) {
+  var c = document.getElementById('addressIntentList');
+  if (!intents || !intents.length) { c.innerHTML = '<p class="text-xs text-slate-500 text-center py-4">No intents found.</p>'; return; }
+  var rows = intents.map(function(i) {
+    var action = i.userIntentText || (i.intentType+' '+(i.uiHints&&i.uiHints.inputAmountHuman||'')+' '+(i.uiHints&&i.uiHints.inputTokenSymbol||''));
+    return '<tr class="border-b border-white/5"><td class="py-2 font-mono text-slate-400">'+i.intentId.slice(0,14)+'...</td><td class="py-2 text-slate-300">'+action+'</td><td class="py-2"><span class="status-'+i.status+' font-semibold">'+i.status+'</span></td><td class="py-2 text-right text-slate-500">'+timeAgo(i.createdAt)+'</td></tr>';
+  }).join('');
+  c.innerHTML = '<table class="w-full text-xs"><thead><tr class="text-slate-500 border-b border-white/5"><th class="text-left pb-2">Intent ID</th><th class="text-left pb-2">Action</th><th class="text-left pb-2">Status</th><th class="text-right pb-2">Time</th></tr></thead><tbody>'+rows+'</tbody></table>';
+}
 
 function createScoreRing(score) {
-  const ctx = document.getElementById('scoreRingChart').getContext('2d');
-  if (scoreRingChartInstance) scoreRingChartInstance.destroy();
-  const pct = score / 1000;
-  const color = score >= 850 ? '#c084fc' : score >= 600 ? '#fb923c' : score >= 300 ? '#4ade80' : score >= 100 ? '#60a5fa' : '#6b7280';
-  scoreRingChartInstance = new Chart(ctx, {
-    type: 'doughnut',
-    data: {
-      datasets: [{
-        data: [pct, 1 - pct],
-        backgroundColor: [color, 'rgba(255,255,255,0.05)'],
-        borderWidth: 0,
-        hoverOffset: 0,
-      }]
-    },
-    options: {
-      cutout: '78%',
-      plugins: { legend: { display: false }, tooltip: { enabled: false } },
-      animation: { duration: 800, easing: 'easeInOutQuart' },
-    }
-  });
+  var ctx = document.getElementById('scoreRingChart').getContext('2d');
+  if (scoreRingChart) scoreRingChart.destroy();
+  var pct = score/1000;
+  var color = score>=800?'#c084fc':score>=600?'#fb923c':score>=400?'#4ade80':score>=200?'#60a5fa':'#6b7280';
+  scoreRingChart = new Chart(ctx, { type:'doughnut', data:{ datasets:[{ data:[pct,1-pct], backgroundColor:[color,'rgba(255,255,255,0.05)'], borderWidth:0, cutout:'78%' }] }, options:{ responsive:false, plugins:{ legend:{display:false}, tooltip:{enabled:false} }, animation:{duration:600} } });
 }
 
-function createRadar(scores) {
-  const ctx = document.getElementById('radarChart').getContext('2d');
-  if (radarChartInstance) radarChartInstance.destroy();
-  radarChartInstance = new Chart(ctx, {
-    type: 'radar',
-    data: {
-      labels: ['Success', 'Volume', 'Alpha', 'Diversity'],
-      datasets: [{
-        label: 'Score',
-        data: [scores.success, scores.volume, scores.alpha, scores.diversity].map(v => Math.round(v)),
-        backgroundColor: 'rgba(99,102,241,0.15)',
-        borderColor: '#6366f1',
-        borderWidth: 2,
-        pointBackgroundColor: '#6366f1',
-        pointRadius: 4,
-      }]
-    },
-    options: {
-      scales: {
-        r: {
-          min: 0, max: 1000,
-          ticks: { color: '#64748b', font: { size: 9 }, stepSize: 250 },
-          grid: { color: 'rgba(255,255,255,0.06)' },
-          pointLabels: { color: '#94a3b8', font: { size: 11 } },
-        }
-      },
-      plugins: { legend: { display: false } },
-    }
-  });
-}
-
-function createHistory(history) {
-  const ctx = document.getElementById('historyChart').getContext('2d');
-  if (historyChartInstance) historyChartInstance.destroy();
-  if (!history || history.length === 0) {
-    historyChartInstance = null;
-    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-    ctx.fillStyle = '#475569';
-    ctx.font = '12px system-ui';
-    ctx.textAlign = 'center';
-    ctx.fillText('No history available', ctx.canvas.width / 2, ctx.canvas.height / 2);
-    return;
-  }
-  const labels = history.map(h => new Date(h.computedAt).toLocaleDateString());
-  const data   = history.map(h => h.scores.final);
-  historyChartInstance = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels,
-      datasets: [{
-        label: 'Final Score',
-        data,
-        borderColor: '#6366f1',
-        backgroundColor: 'rgba(99,102,241,0.1)',
-        borderWidth: 2,
-        pointRadius: 3,
-        fill: true,
-        tension: 0.4,
-      }]
-    },
-    options: {
-      scales: {
-        y: { min: 0, max: 1000, ticks: { color: '#64748b', font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        x: { ticks: { color: '#64748b', font: { size: 9 } }, grid: { display: false } },
-      },
-      plugins: { legend: { display: false } },
-    }
-  });
-}
-
-// ─── Dimension Bar ─────────────────────────────────────────────────────────
 function renderDimensions(scores) {
-  const dims = [
-    { key: 'success',   label: 'Success Rate',  color: '#4ade80', weight: '35%' },
-    { key: 'volume',    label: 'Volume',         color: '#60a5fa', weight: '30%' },
-    { key: 'alpha',     label: 'Alpha',          color: '#f59e0b', weight: '20%' },
-    { key: 'diversity', label: 'Diversity',      color: '#c084fc', weight: '15%' },
-  ];
-  const container = document.getElementById('dimensionScores');
-  container.innerHTML = dims.map(d => {
-    const val = Math.round(scores[d.key] || 0);
-    const pct = (val / 1000) * 100;
-    return `
-      <div>
-        <div class="flex justify-between text-xs mb-1">
-          <span class="text-slate-400">${d.label} <span class="text-slate-600">(weight ${d.weight})</span></span>
-          <span class="font-mono text-white">${val}</span>
-        </div>
-        <div class="h-1.5 rounded-full bg-white/5 overflow-hidden">
-          <div class="h-full rounded-full transition-all duration-700" style="width:${pct}%;background:${d.color}"></div>
-        </div>
-      </div>`;
+  var dims = [{key:'successScore',label:'Success',max:1000},{key:'volumeScore',label:'Volume',max:300},{key:'alphaScore',label:'Alpha',max:300},{key:'diversityScore',label:'Diversity',max:200}];
+  document.getElementById('dimensionScores').innerHTML = dims.map(function(d) {
+    var val = scores[d.key]||0, pct = Math.min(100,(val/d.max)*100);
+    return '<div><div class="flex justify-between text-xs mb-1"><span class="text-slate-400">'+d.label+'</span><span class="text-white font-semibold">'+Math.round(val)+'<span class="text-slate-500">/'+d.max+'</span></span></div><div class="h-1.5 rounded-full bg-white/5"><div class="h-1.5 rounded-full bg-indigo-500" style="width:'+pct+'%"></div></div></div>';
   }).join('');
 }
 
-// ─── Metrics Grid ──────────────────────────────────────────────────────────
-function renderMetrics(metrics) {
-  const items = [
-    { label: 'Total Intents',    value: metrics.totalIntentsSubmitted?.toLocaleString() ?? '—' },
-    { label: 'Success Rate',     value: metrics.successRate != null ? (metrics.successRate * 100).toFixed(1) + '%' : '—' },
-    { label: 'Total Volume',     value: metrics.totalVolumeUSD != null ? '$' + formatNum(metrics.totalVolumeUSD) : '—' },
-    { label: 'Active Weeks',     value: metrics.activeWeeks?.toString() ?? '—' },
-    { label: 'Unique Skills',    value: metrics.uniqueSkillsUsed?.toString() ?? '—' },
-    { label: 'Alpha Trades',     value: metrics.alphaTradeCount?.toString() ?? '—' },
-    { label: 'Largest Trade',    value: metrics.largestSingleTradeUSD != null ? '$' + formatNum(metrics.largestSingleTradeUSD) : '—' },
-    { label: 'Avg Slippage',     value: metrics.avgSlippageBps != null ? metrics.avgSlippageBps + ' bps' : '—' },
-  ];
-  document.getElementById('metricsGrid').innerHTML = items.map(i => `
-    <div class="glass rounded-xl p-4">
-      <div class="text-xs text-slate-500 mb-1">${i.label}</div>
-      <div class="text-lg font-semibold text-white">${i.value}</div>
-    </div>`).join('');
-}
-
-function formatNum(n) {
-  if (n >= 1e9) return (n/1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return (n/1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n/1e3).toFixed(1) + 'K';
-  return n.toFixed(2);
-}
-
-// ─── Snapshot Meta ─────────────────────────────────────────────────────────
-function renderMeta(snapshot) {
-  const items = [
-    { label: 'Snapshot ID',   value: snapshot.snapshotId?.slice(0, 20) + '...' },
-    { label: 'Computed At',   value: new Date(snapshot.computedAt).toLocaleString() },
-    { label: 'Decay Factor',  value: snapshot.scores?.decayFactor?.toFixed(4) ?? '—' },
-    { label: 'Block Number',  value: snapshot.blockNumber?.toLocaleString() ?? 'Pending' },
-    { label: 'Chain ID',      value: snapshot.chainId?.toString() ?? '—' },
-    { label: 'Version',       value: snapshot.version ?? '—' },
-  ];
-  document.getElementById('snapshotMeta').innerHTML = items.map(i => `
-    <div>
-      <div class="text-slate-500 mb-1">${i.label}</div>
-      <div class="text-slate-200 font-mono">${i.value}</div>
-    </div>`).join('');
-}
-
-// ─── Tags ──────────────────────────────────────────────────────────────────
 function renderTags(tags) {
-  const container = document.getElementById('behaviorTags');
-  if (!tags || tags.length === 0) {
-    container.innerHTML = '<span class="text-xs text-slate-500">No behavior tags yet</span>';
-    return;
-  }
-  container.innerHTML = tags.map(t => `<span class="tag-pill">${t.replace(/_/g,' ')}</span>`).join('');
+  document.getElementById('behaviorTags').innerHTML = (!tags||!tags.length) ? '<span class="text-xs text-slate-500">No behavior tags yet</span>' : tags.map(function(t){ return '<span class="tag-pill">'+t.replace(/_/g,' ')+'</span>'; }).join('');
 }
 
-// ─── Main Lookup ───────────────────────────────────────────────────────────
-async function lookupAddress() {
-  const raw = document.getElementById('addressInput').value.trim();
-  if (!raw) return;
+function renderMetrics(m) {
+  var items = [{label:'Total Intents',value:m.totalIntents},{label:'Success Rate',value:m.successRate!=null?(m.successRate*100).toFixed(1)+'%':'-'},{label:'Volume USD',value:'$'+(m.totalVolumeUSD||0).toLocaleString()},{label:'Active Weeks',value:m.activeWeeks||0}];
+  document.getElementById('metricsGrid').innerHTML = items.map(function(i){ return '<div class="glass rounded-xl p-4 text-center"><div class="text-xs text-slate-500 mb-1">'+i.label+'</div><div class="text-xl font-bold text-white">'+i.value+'</div></div>'; }).join('');
+}
 
-  const address = raw.toLowerCase();
-  if (!/^0x[0-9a-f]{40}$/.test(address)) {
-    showError('Invalid Ethereum address format');
-    return;
-  }
+function createRadar(scores) {
+  var ctx = document.getElementById('radarChart').getContext('2d');
+  if (radarChartInst) radarChartInst.destroy();
+  radarChartInst = new Chart(ctx, { type:'radar', data:{ labels:['Success','Volume','Alpha','Diversity'], datasets:[{ data:[(scores.successScore/1000)*100,(scores.volumeScore/300)*100,(scores.alphaScore/300)*100,(scores.diversityScore/200)*100], backgroundColor:'rgba(99,102,241,0.2)', borderColor:'#6366f1', pointBackgroundColor:'#6366f1', borderWidth:2 }] }, options:{ responsive:true, maintainAspectRatio:false, scales:{ r:{ min:0, max:100, ticks:{display:false}, grid:{color:'rgba(255,255,255,0.05)'}, pointLabels:{color:'#94a3b8',font:{size:11}} } }, plugins:{legend:{display:false}} } });
+}
 
-  document.getElementById('results').classList.remove('hidden');
-  document.getElementById('addressDisplay').textContent = address.slice(0,6) + '...' + address.slice(-4);
-  document.getElementById('scoreValue').textContent = '...';
+function createHistory(history) {
+  var ctx = document.getElementById('historyChart').getContext('2d');
+  if (historyChartInst) historyChartInst.destroy();
+  if (!history || !history.length) { ctx.canvas.parentElement.innerHTML = '<div class="flex items-center justify-center h-full text-xs text-slate-500">No history yet</div>'; return; }
+  historyChartInst = new Chart(ctx, { type:'line', data:{ labels:history.map(function(h){ return new Date(h.computedAt).toLocaleDateString(); }), datasets:[{ data:history.map(function(h){ return h.scores&&h.scores.final||h.finalScore||0; }), borderColor:'#6366f1', backgroundColor:'rgba(99,102,241,0.1)', fill:true, tension:0.4, pointRadius:3, pointBackgroundColor:'#6366f1', borderWidth:2 }] }, options:{ responsive:true, maintainAspectRatio:false, scales:{ x:{ticks:{color:'#64748b',font:{size:10}},grid:{display:false}}, y:{min:0,max:1000,ticks:{color:'#64748b',font:{size:10}},grid:{color:'rgba(255,255,255,0.05)'}} }, plugins:{legend:{display:false}} } });
+}
 
+function renderMeta(snap) {
+  var items = [{label:'Snapshot ID',value:snap.snapshotId?snap.snapshotId.slice(0,18)+'...':'-'},{label:'Computed At',value:new Date(snap.computedAt).toLocaleString()},{label:'Valid Until',value:new Date(snap.validUntil).toLocaleString()},{label:'Decay Factor',value:snap.scores&&snap.scores.decayFactor?snap.scores.decayFactor.toFixed(3):'-'},{label:'Chain ID',value:snap.chainId},{label:'Composite',value:Math.round(snap.scores&&snap.scores.composite||0)}];
+  document.getElementById('snapshotMeta').innerHTML = items.map(function(i){ return '<div><div class="text-slate-500 mb-1">'+i.label+'</div><div class="text-white font-mono">'+i.value+'</div></div>'; }).join('');
+}
+
+var intentCurrentPage = 0, intentTotalCount = 0;
+var INTENT_PAGE_SIZE = 15;
+
+async function loadIntents() {
+  var status = document.getElementById('intentStatusFilter').value;
+  var address = document.getElementById('intentAddressFilter').value.trim();
+  var offset = intentCurrentPage * INTENT_PAGE_SIZE;
+  var params = new URLSearchParams({limit:INTENT_PAGE_SIZE, offset:offset});
+  if (status) params.set('status', status);
+  if (address && /^0x[0-9a-fA-F]{40}$/.test(address)) params.set('address', address);
+  var tbody = document.getElementById('intentTableBody');
+  tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-slate-500 text-xs">Loading...</td></tr>';
   try {
-    // Fetch snapshot
-    const res = await fetch(`${API_BASE}/v1/reputation/${CHAIN_ID}/${address}`);
-    const json = await res.json();
-
-    if (!res.ok || !json.success) {
-      showError(json.error || 'Failed to fetch reputation');
-      return;
-    }
-
-    const snapshot = json.data;
-    const scores   = snapshot.scores;
-    const metrics  = snapshot.metrics;
-
-    // Score ring
-    document.getElementById('scoreValue').textContent = Math.round(scores.final);
-    createScoreRing(scores.final);
-
-    // Tier badge
-    const tierEl = document.getElementById('tierBadge');
-    tierEl.textContent = snapshot.riskTier;
-    tierEl.className = `tier-${snapshot.riskTier} text-xs font-bold px-3 py-1 rounded-full mb-2`;
-
-    // Dimensions
-    renderDimensions(scores);
-
-    // Tags
-    renderTags(snapshot.behaviorTags);
-
-    // Metrics
-    renderMetrics(metrics);
-
-    // Radar
-    createRadar(scores);
-
-    // Snapshot meta
-    renderMeta(snapshot);
-
-    // History
-    const histRes = await fetch(`${API_BASE}/v1/reputation/${CHAIN_ID}/${address}/history`);
-    const histJson = await histRes.json();
-    createHistory(histJson.success ? histJson.data : []);
-
-  } catch (err) {
-    showError('API unavailable. Start the reputation service on port 3002.');
-    console.error(err);
-  }
+    var res = await fetch(EXPLORER_API+'/v1/explorer/intents?'+params.toString());
+    var json = await res.json();
+    if (!json.success) { tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-red-400 text-xs">'+json.error+'</td></tr>'; return; }
+    intentTotalCount = json.meta.total;
+    document.getElementById('intentTotal').textContent = intentTotalCount+' intents';
+    document.getElementById('intentPageInfo').textContent = 'Page '+(intentCurrentPage+1)+' of '+Math.max(1,Math.ceil(intentTotalCount/INTENT_PAGE_SIZE));
+    if (!json.data.length) { tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-slate-500 text-xs">No intents found.</td></tr>'; return; }
+    tbody.innerHTML = json.data.map(function(i) {
+      var action = i.userIntentText || (i.intentType+' '+(i.uiHints&&i.uiHints.inputAmountHuman||'?')+' '+(i.uiHints&&i.uiHints.inputTokenSymbol||'')+' to '+(i.uiHints&&i.uiHints.outputTokenSymbol||''));
+      return '<tr class="border-b border-white/5 hover:bg-white/2 cursor-pointer" onclick="loadIntentDetail(\''+i.intentId+'\')"><td class="px-4 py-3 font-mono text-xs text-slate-400">'+i.intentId.slice(0,16)+'...</td><td class="px-4 py-3 text-xs text-slate-300 font-mono">'+i.smartAccount.slice(0,8)+'...'+i.smartAccount.slice(-4)+'</td><td class="px-4 py-3 text-xs text-slate-200">'+action+'</td><td class="px-4 py-3 text-xs"><span class="status-'+i.status+' font-semibold">'+i.status+'</span></td><td class="px-4 py-3 text-xs text-right text-slate-500">'+timeAgo(i.createdAt)+'</td></tr>';
+    }).join('');
+  } catch(e) { tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-slate-500 text-xs">Explorer API unavailable.</td></tr>'; }
 }
 
-// ─── Leaderboard ───────────────────────────────────────────────────────────
+function intentPage(dir) {
+  var maxPage = Math.ceil(intentTotalCount/INTENT_PAGE_SIZE)-1;
+  intentCurrentPage = Math.max(0, Math.min(maxPage, intentCurrentPage+dir));
+  loadIntents();
+}
+
+async function loadIntentDetail(intentId) {
+  var panel = document.getElementById('intentDetailPanel');
+  var content = document.getElementById('intentDetailContent');
+  panel.classList.remove('hidden');
+  content.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">Loading...</div>';
+  panel.scrollIntoView({behavior:'smooth',block:'nearest'});
+  try {
+    var res = await fetch(EXPLORER_API+'/v1/explorer/intents/'+intentId);
+    var json = await res.json();
+    if (!json.success) { content.innerHTML = '<p class="text-red-400 text-xs">'+json.error+'</p>'; return; }
+    var d = json.data, intent = d.intent||{};
+    var policyHtml = d.policyResult ?
+      '<div class="space-y-2 text-xs"><div class="flex justify-between"><span class="text-slate-400">Status</span><span class="'+(d.policyResult.status==='PASS'?'text-green-400':'text-red-400')+' font-semibold">'+d.policyResult.status+'</span></div>'+(d.policyResult.summary||[]).map(function(s){ return '<div class="text-slate-400">'+s+'</div>'; }).join('')+'</div>' :
+      '<p class="text-xs text-slate-500">No policy result recorded.</p>';
+    var solutionsHtml = d.solutions.length ?
+      d.solutions.map(function(s){ return '<div class="glass rounded-lg p-2 mb-2 text-xs"><div class="flex justify-between"><span class="text-slate-400">Solver</span><span class="font-mono text-slate-300">'+s.solverId+'</span></div><div class="flex justify-between"><span class="text-slate-400">Status</span><span class="status-'+s.status+'">'+s.status+'</span></div></div>'; }).join('') :
+      '<p class="text-xs text-slate-500">No solutions yet.</p>';
+    content.innerHTML = '<div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><div class="text-xs text-slate-500 mb-3">Intent Details</div><div class="space-y-2 text-xs"><div class="flex justify-between"><span class="text-slate-400">Intent ID</span><span class="font-mono text-slate-300">'+d.intentId.slice(0,20)+'...</span></div><div class="flex justify-between"><span class="text-slate-400">Status</span><span class="status-'+d.status+' font-semibold">'+d.status+'</span></div><div class="flex justify-between"><span class="text-slate-400">Account</span><span class="font-mono text-slate-300">'+(intent.smartAccount||'').slice(0,12)+'...</span></div><div class="flex justify-between"><span class="text-slate-400">Action</span><span class="text-white">'+(intent.meta&&intent.meta.userIntentText||'-')+'</span></div><div class="flex justify-between"><span class="text-slate-400">Created</span><span class="text-slate-300">'+new Date(d.createdAt*1000).toLocaleString()+'</span></div></div></div><div><div class="text-xs text-slate-500 mb-3">Policy Result</div>'+policyHtml+'<div class="text-xs text-slate-500 mt-4 mb-2">Solutions ('+d.solutions.length+')</div>'+solutionsHtml+'</div></div>';
+  } catch(e) { content.innerHTML = '<p class="text-red-400 text-xs">Failed to load intent detail.</p>'; }
+}
+
+function closeIntentDetail() { document.getElementById('intentDetailPanel').classList.add('hidden'); }
+
+var activityChartInst;
+
+async function loadActivity() {
+  try {
+    var res = await fetch(EXPLORER_API+'/v1/explorer/activity?limit=20');
+    var json = await res.json();
+    if (!json.success) return;
+    var feed = document.getElementById('activityFeed');
+    if (!json.data.length) { feed.innerHTML = '<div class="text-xs text-slate-500 text-center py-8">No activity yet. Submit some intents to see them here.</div>'; return; }
+    feed.innerHTML = json.data.map(function(item) {
+      return '<div class="glass glass-hover rounded-xl px-4 py-3 flex items-center gap-4 cursor-pointer" onclick="switchTab(\'intents\');document.getElementById(\'intentAddressFilter\').value=\''+item.smartAccount+'\';loadIntents()"><div class="flex-shrink-0 w-8 h-8 rounded-lg bg-indigo-900/50 flex items-center justify-center text-xs font-bold text-indigo-400">'+item.intentType.slice(0,2)+'</div><div class="flex-1 min-w-0"><div class="text-sm text-white truncate">'+item.description+'</div><div class="text-xs text-slate-500 font-mono mt-0.5">'+item.smartAccount.slice(0,8)+'...'+item.smartAccount.slice(-4)+'</div></div><div class="flex-shrink-0 text-right"><div class="text-xs status-'+item.status+' font-semibold">'+item.status+'</div><div class="text-xs text-slate-500 mt-0.5">'+timeAgo(item.createdAt)+'</div></div></div>';
+    }).join('');
+    var statsRes = await fetch(EXPLORER_API+'/v1/explorer/stats');
+    var statsJson = await statsRes.json();
+    if (statsJson.success) renderActivityChart(statsJson.data.recentActivity||[]);
+  } catch(e) {}
+}
+
+function renderActivityChart(activity) {
+  var ctx = document.getElementById('activityChart').getContext('2d');
+  if (activityChartInst) activityChartInst.destroy();
+  if (!activity.length) return;
+  activityChartInst = new Chart(ctx, { type:'bar', data:{ labels:activity.map(function(a){ return a.hour+'h ago'; }), datasets:[{ data:activity.map(function(a){ return a.count; }), backgroundColor:'rgba(99,102,241,0.4)', borderColor:'#6366f1', borderWidth:1, borderRadius:4 }] }, options:{ responsive:true, maintainAspectRatio:false, scales:{ x:{ticks:{color:'#64748b',font:{size:10}},grid:{display:false}}, y:{ticks:{color:'#64748b',font:{size:10},stepSize:1},grid:{color:'rgba(255,255,255,0.05)'}} }, plugins:{legend:{display:false}} } });
+}
+
 async function loadLeaderboard() {
-  const body = document.getElementById('leaderboardBody');
-  body.innerHTML = '<div class="text-xs text-slate-500 text-center py-4 animate-pulse-slow">Loading...</div>';
-
+  var tbody = document.getElementById('leaderboardBody');
+  tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-slate-500 text-xs">Loading...</td></tr>';
   try {
-    const res = await fetch(`${API_BASE}/v1/reputation/${CHAIN_ID}/leaderboard?limit=10`);
-    const json = await res.json();
-
-    if (!res.ok || !json.success || json.data.length === 0) {
-      body.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">No data yet. Submit some intents to build reputation.</div>';
-      return;
-    }
-
-    const tierColors = { UNKNOWN:'#6b7280', LOW:'#60a5fa', STANDARD:'#4ade80', TRUSTED:'#fb923c', ELITE:'#c084fc' };
-
-    body.innerHTML = `
-      <table class="w-full text-xs">
-        <thead>
-          <tr class="text-slate-500 border-b border-white/5">
-            <th class="text-left pb-2 font-medium">#</th>
-            <th class="text-left pb-2 font-medium">Address</th>
-            <th class="text-left pb-2 font-medium">Tier</th>
-            <th class="text-right pb-2 font-medium">Score</th>
-            <th class="text-right pb-2 font-medium">Success</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${json.data.map((row, i) => `
-            <tr class="border-b border-white/5 hover:bg-white/2 cursor-pointer" onclick="setExample('${row.address}');lookupAddress()">
-              <td class="py-2 text-slate-500">${i + 1}</td>
-              <td class="py-2 font-mono text-slate-300">${row.address.slice(0,8)}...${row.address.slice(-4)}</td>
-              <td class="py-2"><span style="color:${tierColors[row.riskTier] || '#6b7280'}">${row.riskTier}</span></td>
-              <td class="py-2 text-right font-semibold text-white">${Math.round(row.finalScore)}</td>
-              <td class="py-2 text-right text-slate-400">${row.successRate != null ? (row.successRate * 100).toFixed(1) + '%' : '—'}</td>
-            </tr>`).join('')}
-        </tbody>
-      </table>`;
-  } catch (err) {
-    body.innerHTML = '<div class="text-xs text-slate-500 text-center py-4">Service offline. Start the reputation API to see leaderboard.</div>';
-  }
+    var res = await fetch(EXPLORER_API+'/v1/explorer/leaderboard?chainId='+CHAIN_ID+'&limit=20');
+    var json = await res.json();
+    if (!json.success || !json.data.length) { tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-slate-500 text-xs">No data yet.</td></tr>'; return; }
+    var tierColors = {UNKNOWN:'#6b7280',LOW:'#60a5fa',STANDARD:'#4ade80',TRUSTED:'#fb923c',ELITE:'#c084fc'};
+    tbody.innerHTML = json.data.map(function(row, i) {
+      var tier = row.riskTier || row.tier || 'UNKNOWN';
+      var score = row.finalScore || row.score || 0;
+      return '<tr class="border-b border-white/5 hover:bg-white/2 cursor-pointer" onclick="setExample(\''+row.address+'\');switchTab(\'search\');lookupAddress()"><td class="px-4 py-3 text-xs text-slate-500">'+(i+1)+'</td><td class="px-4 py-3 text-xs font-mono text-slate-300">'+row.address.slice(0,10)+'...'+row.address.slice(-4)+'</td><td class="px-4 py-3 text-xs"><span style="color:'+(tierColors[tier]||'#6b7280')+'">'+tier+'</span></td><td class="px-4 py-3 text-xs text-right font-semibold text-white">'+Math.round(score)+'</td><td class="px-4 py-3 text-xs text-right text-slate-400">'+(row.totalIntentsOnChain||row.totalIntents||'-')+'</td><td class="px-4 py-3 text-xs text-right text-slate-400">'+(row.successRate!=null?(row.successRate*100).toFixed(1)+'%':'-')+'</td></tr>';
+    }).join('');
+  } catch(e) { tbody.innerHTML = '<tr><td colspan="6" class="text-center py-8 text-slate-500 text-xs">Explorer API unavailable.</td></tr>'; }
 }
 
-// ─── Helpers ───────────────────────────────────────────────────────────────
-function setExample(addr) {
-  document.getElementById('addressInput').value = addr;
-}
-
+function setText(id, val) { var el=document.getElementById(id); if(el) el.textContent=val; }
+function setExample(addr) { document.getElementById('addressInput').value=addr; }
 function showError(msg) {
-  const toast = document.getElementById('errorToast');
-  document.getElementById('errorMsg').textContent = msg;
+  var toast=document.getElementById('errorToast');
+  document.getElementById('errorMsg').textContent=msg;
   toast.classList.remove('hidden');
-  setTimeout(() => toast.classList.add('hidden'), 4000);
+  setTimeout(function(){ toast.classList.add('hidden'); }, 4000);
+}
+function timeAgo(unixTs) {
+  var secs=Math.floor(Date.now()/1000)-unixTs;
+  if(secs<60) return secs+'s ago';
+  if(secs<3600) return Math.floor(secs/60)+'m ago';
+  if(secs<86400) return Math.floor(secs/3600)+'h ago';
+  return Math.floor(secs/86400)+'d ago';
 }
 
-// Enter key support
-document.getElementById('addressInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') lookupAddress();
-});
-
-// Load leaderboard on page load
-loadLeaderboard();
+document.getElementById('addressInput').addEventListener('keydown', function(e) { if(e.key==='Enter') lookupAddress(); });
+loadStats();
+setInterval(loadStats, 30000);
+setInterval(function() {
+  if(!document.getElementById('panel-activity').classList.contains('hidden')) loadActivity();
+}, 10000);
 </script>
 </body>
 </html>
