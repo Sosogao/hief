@@ -328,31 +328,8 @@ export class ConversationEngine {
     const slippage = ((intent.constraints.slippageBps ?? 50) / 100).toFixed(2);
     const deadline = new Date(intent.deadline * 1000).toLocaleTimeString();
 
-    // Use LLM for natural language confirmation if available
-    try {
-      const completion = await this.client.chat.completions.create({
-        model: this.model,
-        temperature: 0.3,
-        messages: [
-          { role: 'system', content: CONFIRMATION_SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: `Original request: "${parseResult.rawIntent ?? intent.meta?.userIntentText}"
-Transaction details:
-- Action: ${parseResult.intentType}
-- Sell: ${inputAmountHuman} ${inputSymbol}
-- Buy: ${outputSymbol} (min: ${intent.outputs[0]?.minAmount === '0' ? 'market rate' : intent.outputs[0]?.minAmount})
-- Slippage tolerance: ${slippage}%
-- Network: ${chain}
-- Deadline: ${deadline}
-- Protocol: ${(intent.meta as any)?.protocol ?? 'best available (CoW Protocol)'}`,
-          },
-        ],
-      });
-      return completion.choices[0]?.message?.content ?? this.buildFallbackConfirmation(intent, inputSymbol, outputSymbol, inputAmountHuman, slippage, chain);
-    } catch {
-      return this.buildFallbackConfirmation(intent, inputSymbol, outputSymbol, inputAmountHuman, slippage, chain);
-    }
+    // Use template-based confirmation for fast response (single LLM call per intent)
+    return this.buildFallbackConfirmation(intent, inputSymbol, outputSymbol, inputAmountHuman, slippage, chain);
   }
 
   private buildFallbackConfirmation(

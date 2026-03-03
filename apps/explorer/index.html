@@ -65,6 +65,7 @@
     <button onclick="switchTab('intents')" id="tab-intents" class="tab-inactive px-4 py-2 text-sm font-medium border-b-2 transition-colors">Intent History</button>
     <button onclick="switchTab('activity')" id="tab-activity" class="tab-inactive px-4 py-2 text-sm font-medium border-b-2 transition-colors">Live Activity</button>
     <button onclick="switchTab('leaderboard')" id="tab-leaderboard" class="tab-inactive px-4 py-2 text-sm font-medium border-b-2 transition-colors">Leaderboard</button>
+    <button onclick="switchTab('chat')" id="tab-chat" class="tab-inactive px-4 py-2 text-sm font-medium border-b-2 transition-colors">&#129302; AI Agent</button>
   </div>
 
   <div id="panel-search">
@@ -167,6 +168,68 @@
     <div id="activityFeed" class="space-y-2"><div class="text-xs text-slate-500 text-center py-8">Loading activity...</div></div>
   </div>
 
+  <!-- ─── AI Agent Chat Panel ─────────────────────────────────────────────── -->
+  <div id="panel-chat" class="hidden">
+    <div class="max-w-3xl mx-auto">
+      <div class="text-center mb-6">
+        <h2 class="text-2xl font-bold text-white mb-1">AI DeFi Agent</h2>
+        <p class="text-slate-400 text-sm">Describe what you want to do in plain English. The AI will parse your intent, validate it through Policy Engine, and submit it to the network.</p>
+      </div>
+      <!-- Wallet Config -->
+      <div class="glass rounded-2xl p-4 mb-4 flex flex-wrap gap-3 items-center">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-500">Wallet:</span>
+          <input id="chatWallet" type="text" value="0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white font-mono w-80" placeholder="0x..." />
+        </div>
+        <div class="flex items-center gap-2 ml-auto">
+          <span class="text-xs text-slate-500">Session:</span>
+          <span id="chatSessionId" class="text-xs text-indigo-400 font-mono">Not started</span>
+          <button onclick="startChatSession()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs">New Session</button>
+        </div>
+      </div>
+      <!-- Chat Messages -->
+      <div id="chatMessages" class="glass rounded-2xl p-4 mb-4 space-y-3" style="min-height:380px;max-height:520px;overflow-y:auto">
+        <div class="flex gap-3">
+          <div class="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold flex-shrink-0">AI</div>
+          <div class="flex-1">
+            <div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-200">
+              Hi! I'm your HIEF AI DeFi Agent. Tell me what you'd like to do — for example:<br/>
+              <span class="text-indigo-400 cursor-pointer hover:underline" onclick="setChatInput('swap 100 USDC to ETH')">"swap 100 USDC to ETH"</span> &nbsp;·&nbsp;
+              <span class="text-indigo-400 cursor-pointer hover:underline" onclick="setChatInput('send 50 USDC to 0xabc...')">"send 50 USDC to 0xabc..."</span> &nbsp;·&nbsp;
+              <span class="text-indigo-400 cursor-pointer hover:underline" onclick="setChatInput('bridge 0.1 ETH to Optimism')">"bridge 0.1 ETH to Optimism"</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <!-- Quick Suggestions -->
+      <div class="flex flex-wrap gap-2 mb-3" id="chatSuggestions">
+        <span class="text-xs text-slate-500 self-center">Try:</span>
+        <button onclick="setChatInput('swap 100 USDC to ETH')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">swap 100 USDC to ETH</button>
+        <button onclick="setChatInput('swap 0.05 ETH to USDC')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">swap 0.05 ETH to USDC</button>
+        <button onclick="setChatInput('what is my reputation score?')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">what is my reputation score?</button>
+        <button onclick="setChatInput('show me my recent intents')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">show recent intents</button>
+      </div>
+      <!-- Input Area -->
+      <div class="flex gap-2">
+        <input id="chatInput" type="text" placeholder="e.g. swap 100 USDC to ETH" class="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-slate-500 text-sm" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendChatMessage();}" />
+        <button id="chatSendBtn" onclick="sendChatMessage()" class="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm flex items-center gap-2">
+          <span id="chatSendLabel">Send</span>
+        </button>
+      </div>
+      <!-- Intent Preview Card (shown when agent has parsed an intent) -->
+      <div id="chatIntentPreview" class="hidden mt-4 glass rounded-2xl p-5 border border-indigo-500/30">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-sm font-semibold text-indigo-300">Parsed Intent</h3>
+          <div class="flex gap-2">
+            <button onclick="confirmChatIntent()" class="px-4 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded-lg text-xs font-semibold">Confirm &amp; Submit</button>
+            <button onclick="cancelChatIntent()" class="px-4 py-1.5 glass hover:bg-white/10 text-slate-400 hover:text-white rounded-lg text-xs">Cancel</button>
+          </div>
+        </div>
+        <div id="chatIntentPreviewContent" class="text-xs space-y-2"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="panel-leaderboard" class="hidden">
     <div class="flex items-center justify-between mb-4">
       <h2 class="text-lg font-bold text-white">Top Reputation Addresses</h2>
@@ -193,7 +256,15 @@
 <script>
 const EXPLORER_API = (window.EXPLORER_API_URL || 'http://localhost:3006');
 const CHAIN_ID = 99917;
-const TABS = ['search','intents','activity','leaderboard'];
+const TABS = ['search','intents','activity','leaderboard','chat'];
+const AGENT_API = 'http://localhost:3004';
+const BUS_API = 'http://localhost:3001';
+const SOLVER_API = 'http://localhost:3008';
+
+// ─── Chat State ───────────────────────────────────────────────────────────────
+var chatSessionId = null;
+var chatPendingIntent = null;
+var chatPendingSessionState = null;
 
 function switchTab(name) {
   TABS.forEach(function(t) {
@@ -203,6 +274,7 @@ function switchTab(name) {
   if (name==='intents') loadIntents();
   if (name==='activity') loadActivity();
   if (name==='leaderboard') loadLeaderboard();
+  if (name==='chat' && !chatSessionId) startChatSession();
 }
 
 async function loadStats() {
@@ -427,6 +499,202 @@ function timeAgo(unixTs) {
 }
 
 document.getElementById('addressInput').addEventListener('keydown', function(e) { if(e.key==='Enter') lookupAddress(); });
+
+// ─── AI Agent Chat Functions ──────────────────────────────────────────────────
+async function startChatSession() {
+  var wallet = document.getElementById('chatWallet').value.trim();
+  if (!wallet || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) { showError('Invalid wallet address'); return; }
+  try {
+    var res = await fetch(AGENT_API+'/v1/agent/sessions', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ smartAccount: wallet, chainId: CHAIN_ID })
+    });
+    var json = await res.json();
+    if (!res.ok) { showError('Failed to start session: '+(json.message||'unknown')); return; }
+    chatSessionId = json.sessionId;
+    document.getElementById('chatSessionId').textContent = chatSessionId.slice(0,12)+'...';
+    document.getElementById('chatSessionId').title = chatSessionId;
+    appendChatMessage('system', 'Session started. Wallet: '+wallet.slice(0,8)+'...'+wallet.slice(-4)+' | Chain: '+CHAIN_ID);
+  } catch(e) { showError('Agent API unavailable (port 3004)'); }
+}
+
+function setChatInput(text) {
+  document.getElementById('chatInput').value = text;
+  document.getElementById('chatInput').focus();
+}
+
+async function sendChatMessage() {
+  var input = document.getElementById('chatInput');
+  var msg = input.value.trim();
+  if (!msg) return;
+  if (!chatSessionId) { await startChatSession(); if (!chatSessionId) return; }
+
+  input.value = '';
+  appendChatMessage('user', msg);
+  setChatLoading(true);
+  document.getElementById('chatIntentPreview').classList.add('hidden');
+
+  try {
+    // 90s timeout — LLM parsing typically takes 30-60s
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function() { controller.abort(); }, 90000);
+    var res = await fetch(AGENT_API+'/v1/agent/sessions/'+chatSessionId+'/messages', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: msg }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    var json = await res.json();
+    if (!res.ok) { appendChatMessage('agent', 'Error: '+(json.message||'Agent error')); setChatLoading(false); return; }
+
+    appendChatMessage('agent', json.agentResponse);
+    chatPendingSessionState = json.state;
+
+    // If agent has parsed an intent and is awaiting confirmation
+    if (json.intent && (json.state === 'AWAITING_CONFIRMATION' || json.state === 'CONFIRMED')) {
+      chatPendingIntent = json.intent;
+      showIntentPreview(json.intent, json.state);
+    }
+  } catch(e) {
+    if (e.name === 'AbortError') {
+      appendChatMessage('agent', '⏱️ Request timed out (90s). The AI is still processing — please try again.');
+    } else {
+      appendChatMessage('agent', 'Agent API is unavailable. Please ensure the service is running on port 3004.');
+    }
+  }
+  setChatLoading(false);
+}
+
+async function confirmChatIntent() {
+  if (!chatPendingIntent || !chatSessionId) return;
+  document.getElementById('chatIntentPreview').classList.add('hidden');
+  appendChatMessage('user', 'Yes, confirm and submit.');
+  setChatLoading(true);
+
+  try {
+    // Send confirmation message to agent
+    var res = await fetch(AGENT_API+'/v1/agent/sessions/'+chatSessionId+'/messages', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ message: 'yes' })
+    });
+    var json = await res.json();
+    appendChatMessage('agent', json.agentResponse || 'Processing...');
+
+    // If intent is ready to submit, submit to bus
+    if (json.intent && json.state === 'CONFIRMED') {
+      appendChatMessage('system', 'Submitting intent to HIEF network...');
+      try {
+        var busRes = await fetch(BUS_API+'/v1/intents', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify(json.intent)
+        });
+        var busJson = await busRes.json();
+        if (busRes.ok) {
+          var intentId = busJson.intentId || json.intent.intentId;
+          appendChatMessage('system', '✅ Intent submitted! ID: '+intentId.slice(0,20)+'...');
+          appendChatMessage('system', 'Running solver auction...');
+          // Trigger solver network auction
+          setTimeout(async function() {
+            try {
+              var solverRes = await fetch(SOLVER_API+'/v1/solver-network/trigger', {
+                method: 'POST',
+                headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({ intentId: intentId })
+              });
+              var solverJson = await solverRes.json();
+              if (solverJson.success && solverJson.data.winner) {
+                var w = solverJson.data.winner;
+                appendChatMessage('system', '🏆 Auction complete! Winner: '+w.solverName+' | Net: $'+w.netOutUSD.toFixed(4)+' | Route: '+w.route);
+              }
+            } catch(e) {}
+          }, 1500);
+          chatPendingIntent = null;
+          // Refresh stats
+          setTimeout(loadStats, 2000);
+        } else {
+          appendChatMessage('system', '⚠️ Submission failed: '+(busJson.message||JSON.stringify(busJson)));
+        }
+      } catch(e) {
+        appendChatMessage('system', '⚠️ Could not reach Intent Bus (port 3001).');
+      }
+    }
+  } catch(e) { appendChatMessage('agent', 'Error confirming intent.'); }
+  setChatLoading(false);
+}
+
+function cancelChatIntent() {
+  chatPendingIntent = null;
+  document.getElementById('chatIntentPreview').classList.add('hidden');
+  appendChatMessage('agent', 'Intent cancelled. What else would you like to do?');
+}
+
+function showIntentPreview(intent, state) {
+  var preview = document.getElementById('chatIntentPreview');
+  var content = document.getElementById('chatIntentPreviewContent');
+  var hints = intent.meta && intent.meta.uiHints || {};
+  var inputAmt = hints.inputAmountHuman || (intent.input && intent.input.amount) || '?';
+  var inputTok = hints.inputTokenSymbol || '?';
+  var outputTok = hints.outputTokenSymbol || '?';
+  var rows = [
+    ['Action', (intent.meta && intent.meta.userIntentText) || 'DeFi Intent'],
+    ['From', inputAmt + ' ' + inputTok],
+    ['To', outputTok],
+    ['Wallet', (intent.smartAccount||'').slice(0,10)+'...'],
+    ['Chain', intent.chainId || CHAIN_ID],
+    ['Slippage', (intent.constraints && intent.constraints.slippageBps ? intent.constraints.slippageBps/100 : 0.5) + '%'],
+    ['Deadline', intent.deadline ? new Date(intent.deadline*1000).toLocaleTimeString() : '1h'],
+  ];
+  content.innerHTML = rows.map(function(r){
+    return '<div class="flex justify-between"><span class="text-slate-400">'+r[0]+'</span><span class="text-white font-medium">'+r[1]+'</span></div>';
+  }).join('');
+  if (state === 'AWAITING_CONFIRMATION') {
+    preview.classList.remove('hidden');
+  }
+}
+
+function appendChatMessage(role, text) {
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'flex gap-3 ' + (role === 'user' ? 'flex-row-reverse' : '');
+  var avatar = document.createElement('div');
+  avatar.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ' +
+    (role === 'user' ? 'bg-slate-600 text-slate-200' : role === 'system' ? 'bg-green-900 text-green-400' : 'bg-indigo-600 text-white');
+  avatar.textContent = role === 'user' ? 'You' : role === 'system' ? '⚙' : 'AI';
+  var bubble = document.createElement('div');
+  bubble.className = 'flex-1 max-w-lg';
+  var inner = document.createElement('div');
+  inner.className = 'glass rounded-2xl px-4 py-3 text-sm ' +
+    (role === 'user' ? 'rounded-tr-sm text-slate-200 bg-indigo-900/30' : role === 'system' ? 'rounded-tl-sm text-green-400 bg-green-900/20 text-xs font-mono' : 'rounded-tl-sm text-slate-200');
+  inner.textContent = text;
+  bubble.appendChild(inner);
+  div.appendChild(avatar);
+  div.appendChild(bubble);
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function setChatLoading(loading) {
+  var btn = document.getElementById('chatSendBtn');
+  var label = document.getElementById('chatSendLabel');
+  btn.disabled = loading;
+  label.textContent = loading ? '...' : 'Send';
+  if (loading) {
+    var container = document.getElementById('chatMessages');
+    var typing = document.createElement('div');
+    typing.id = 'chatTyping';
+    typing.className = 'flex gap-3';
+    typing.innerHTML = '<div class="w-7 h-7 rounded-full bg-indigo-600 flex items-center justify-center text-xs font-bold flex-shrink-0">AI</div><div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-sm text-slate-400"><span class="animate-pulse">Parsing intent with AI... (may take 30-60s)</span></div>';
+    container.appendChild(typing);
+    container.scrollTop = container.scrollHeight;
+  } else {
+    var t = document.getElementById('chatTyping');
+    if (t) t.remove();
+  }
+}
 loadStats();
 setInterval(loadStats, 30000);
 setInterval(function() {
