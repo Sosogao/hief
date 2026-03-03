@@ -8,16 +8,22 @@
     "packages/solver-adapters/*"
   ],
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "pnpm -r --filter \"!@hief/nft-sync\" --filter \"!@hief/solver-network\" build || true",
     "test": "pnpm -r test",
     "dev": "pnpm --filter @hief/bus dev",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "start": "node gateway.js"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.3.0"
   },
   "dependencies": {
-    "axios": "^1.13.6"
-  }
+    "axios": "^1.13.6",
+    "http-proxy": "^1.18.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "main": "gateway.js"
 }

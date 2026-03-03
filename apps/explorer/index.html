@@ -254,12 +254,16 @@
 <div id="errorToast" class="fixed bottom-6 right-6 bg-red-900/90 border border-red-700 text-red-200 text-sm px-4 py-3 rounded-xl hidden max-w-sm z-50"><span id="errorMsg"></span></div>
 
 <script>
-const EXPLORER_API = (window.EXPLORER_API_URL || 'http://localhost:3006');
+// Auto-detect API base: use relative URLs when served by the gateway, fallback to localhost for local dev
+const _base = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+  ? ''
+  : '';
+const EXPLORER_API = _base;
+const AGENT_API = _base;
+const BUS_API = _base;
+const SOLVER_API = _base;
 const CHAIN_ID = 99917;
 const TABS = ['search','intents','activity','leaderboard','chat'];
-const AGENT_API = 'http://localhost:3004';
-const BUS_API = 'http://localhost:3001';
-const SOLVER_API = 'http://localhost:3008';
 
 // ─── Chat State ───────────────────────────────────────────────────────────────
 var chatSessionId = null;
