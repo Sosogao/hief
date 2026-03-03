@@ -1,0 +1,216 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.validateSolution = validateSolution;
+exports.validateSolutionWithReputation = validateSolutionWithReputation;
+exports.validateIntent = validateIntent;
+const common_1 = require("@hief/common");
+const staticRules_1 = require("../rules/staticRules");
+const forkSimulator_1 = require("../simulation/forkSimulator");
+const reputationPolicyAdapter_1 = require("../reputation/reputationPolicyAdapter");
+const reputationAwareRules_1 = require("../reputation/reputationAwareRules");
+function makeResult(intent, solution, status, findings, summary, executionDiff, reputationContext) {
+    return {
+        policyResultVersion: '0.1',
+        policyRef: { policyVersion: 'v0.1' },
+        intentHash: (0, common_1.computeIntentHash)(intent),
+        solutionId: solution?.solutionId,
+        status,
+        findings,
+        riskTags: findings.filter((f) => f.severity === 'CRITICAL').map((f) => f.ruleId),
+        summary,
+        executionDiff,
+        reputationContext,
+        timestamp: Math.floor(Date.now() / 1000),
+    };
+}
+// ── Shared L4 simulation helper ───────────────────────────────────────────────
+async function runL4(solution, findings, summary) {
+    let simFailed = false;
+    try {
+        const simResult = await (0, forkSimulator_1.runL4Simulation)(solution);
+        if (simResult.status === 'FAIL') {
+            simFailed = true;
+            for (const f of simResult.findings) {
+                findings.push({
+                    ruleId: f.ruleId,
+                    severity: f.severity,
+                    message: f.message,
+                    evidence: f.detail,
+                });
+            }
+            summary.push(`❌ FAIL: L4 simulation found ${simResult.findings.length} violation(s)`);
+        }
+        else if (simResult.status === 'SKIP') {
+            findings.push({
+                ruleId: 'SIM-00',
+                severity: 'LOW',
+                message: simResult.findings[0]?.message ?? 'L4 simulation skipped (Tenderly not configured)',
+            });
+        }
+    }
+    catch (err) {
+        console.error('[POLICY] Simulation error:', err.message);
+        findings.push({
+            ruleId: 'SIM-00',
+            severity: 'LOW',
+            message: `Fork simulation unavailable: ${err.message}`,
+        });
+    }
+    return simFailed;
+}
+// ── Standard validation (no reputation context) ───────────────────────────────
+async function validateSolution(intent, solution) {
+    const findings = [];
+    const summary = [];
+    // Phase 1: Static Rules
+    const { results: ruleResults, hasCriticalFailure, hasHighFailure } = (0, staticRules_1.runStaticRules)(intent, solution);
+    for (const result of ruleResults) {
+        if (!result.passed && result.finding) {
+            findings.push({
+                ruleId: result.finding.ruleId,
+                severity: result.finding.severity,
+                message: result.finding.message,
+                evidence: result.finding.field ? { field: result.finding.field } : undefined,
+            });
+        }
+    }
+    if (hasCriticalFailure) {
+        const criticalFindings = findings.filter((f) => f.severity === 'CRITICAL');
+        summary.push(`❌ FAIL: ${criticalFindings.length} critical rule(s) violated`);
+        criticalFindings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+        return makeResult(intent, solution, 'FAIL', findings, summary);
+    }
+    // Phase 2: Fork Simulation
+    const simFailed = await runL4(solution, findings, summary);
+    if (simFailed) {
+        return makeResult(intent, solution, 'FAIL', findings, summary);
+    }
+    // Determine final status
+    const hasAnyFailure = hasCriticalFailure || hasHighFailure || simFailed;
+    const hasMediumWarnings = findings.some((f) => f.severity === 'MEDIUM');
+    const status = hasAnyFailure ? 'FAIL' : hasMediumWarnings ? 'WARN' : 'PASS';
+    if (status === 'PASS') {
+        summary.push(`✅ PASS: All ${ruleResults.length} rules passed`);
+        summary.push(`Swap ${intent.input.amount} ${intent.input.token} → min ${intent.outputs[0]?.minAmount} ${intent.outputs[0]?.token}`);
+        summary.push(`Expected output: ${solution.quote.expectedOut}`);
+        summary.push(`Fee: ${solution.quote.fee}`);
+    }
+    else if (status === 'WARN') {
+        summary.push(`⚠️ WARN: ${findings.length} warning(s) found`);
+        findings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+    }
+    else {
+        summary.push(`❌ FAIL: ${findings.filter((f) => ['CRITICAL', 'HIGH'].includes(f.severity)).length} issue(s) found`);
+        findings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+    }
+    return makeResult(intent, solution, status, findings, summary);
+}
+// ── Reputation-Aware validation ───────────────────────────────────────────────
+/**
+ * Validate a solution with dynamic per-user policy parameters derived
+ * from the user's reputation tier.
+ *
+ * Key differences from validateSolution():
+ *  - R4 (fee cap) and R5 (slippage cap) thresholds are adjusted per tier
+ *  - R_DAILY_LIMIT is enforced based on tier
+ *  - Risk warnings are surfaced as LOW findings
+ *  - reputationContext is attached to the result for transparency
+ *
+ * Security rules (R1, R2, R6, R7, R10, R11, R12) are NEVER relaxed.
+ */
+async function validateSolutionWithReputation(intent, solution, userAddress) {
+    const findings = [];
+    const summary = [];
+    // Fetch reputation params (graceful degradation to UNKNOWN tier)
+    const adapter = (0, reputationPolicyAdapter_1.getReputationPolicyAdapter)();
+    const params = await adapter.getPolicyParams(userAddress);
+    summary.push(`[REP] User ${userAddress.slice(0, 8)}... | Tier: ${params.tier} | Score: ${params.score}`);
+    summary.push(`[REP] Applied limits — Slippage: ${params.maxSlippageBps}bps | Fee: ${params.maxFeeBps}bps | Daily: $${params.dailyLimitUsd.toLocaleString()}`);
+    // Phase 1: Reputation-Aware Static Rules
+    const { results: ruleResults, reputationFindings, hasCriticalFailure, hasHighFailure, appliedParams, } = (0, reputationAwareRules_1.runReputationAwareRules)(intent, solution, params);
+    for (const result of ruleResults) {
+        if (!result.passed && result.finding) {
+            findings.push({
+                ruleId: result.finding.ruleId,
+                severity: result.finding.severity,
+                message: result.finding.message,
+                evidence: result.finding.field ? { field: result.finding.field } : undefined,
+            });
+        }
+    }
+    // Add reputation-specific findings (daily limit, risk warnings)
+    findings.push(...reputationFindings);
+    if (hasCriticalFailure) {
+        const criticalFindings = findings.filter((f) => f.severity === 'CRITICAL');
+        summary.push(`❌ FAIL: ${criticalFindings.length} critical rule(s) violated`);
+        criticalFindings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+        return makeResult(intent, solution, 'FAIL', findings, summary, undefined, {
+            tier: params.tier,
+            score: params.score,
+            appliedParams,
+        });
+    }
+    // Phase 2: Fork Simulation (skip if tier allows and no high failures)
+    let simFailed = false;
+    if (params.requireSimulation || hasHighFailure) {
+        simFailed = await runL4(solution, findings, summary);
+        if (simFailed) {
+            return makeResult(intent, solution, 'FAIL', findings, summary, undefined, {
+                tier: params.tier,
+                score: params.score,
+                appliedParams,
+            });
+        }
+    }
+    else {
+        summary.push(`[REP] L4 simulation skipped for ${params.tier} tier (score: ${params.score})`);
+    }
+    // Determine final status
+    const hasAnyFailure = hasCriticalFailure || hasHighFailure || simFailed;
+    const hasMediumWarnings = findings.some((f) => f.severity === 'MEDIUM');
+    const status = hasAnyFailure ? 'FAIL' : hasMediumWarnings ? 'WARN' : 'PASS';
+    if (status === 'PASS') {
+        summary.push(`✅ PASS: All rules passed (${params.tier} tier policy applied)`);
+        summary.push(`Swap ${intent.input.amount} ${intent.input.token} → min ${intent.outputs[0]?.minAmount} ${intent.outputs[0]?.token}`);
+        summary.push(`Expected output: ${solution.quote.expectedOut}`);
+        summary.push(`Fee: ${solution.quote.fee}`);
+    }
+    else if (status === 'WARN') {
+        summary.push(`⚠️ WARN: ${findings.filter((f) => f.severity !== 'LOW').length} warning(s) found`);
+        findings.filter((f) => f.severity !== 'LOW').forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+    }
+    else {
+        summary.push(`❌ FAIL: ${findings.filter((f) => ['CRITICAL', 'HIGH'].includes(f.severity)).length} issue(s) found`);
+        findings.filter((f) => ['CRITICAL', 'HIGH'].includes(f.severity)).forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));
+    }
+    return makeResult(intent, solution, status, findings, summary, undefined, {
+        tier: params.tier,
+        score: params.score,
+        appliedParams,
+    });
+}
+// ── Intent pre-validation ─────────────────────────────────────────────────────
+async function validateIntent(intent) {
+    const findings = [];
+    const summary = [];
+    const now = Math.floor(Date.now() / 1000);
+    if (intent.deadline <= now + 60) {
+        findings.push({
+            ruleId: 'R1',
+            severity: 'CRITICAL',
+            message: `Intent deadline ${intent.deadline} is too soon or expired`,
+            evidence: { deadline: intent.deadline, now },
+        });
+    }
+    if (intent.outputs.length === 0) {
+        findings.push({
+            ruleId: 'R10',
+            severity: 'CRITICAL',
+            message: 'Intent has no outputs defined',
+        });
+    }
+    const status = findings.length === 0 ? 'PASS' : 'FAIL';
+    summary.push(status === 'PASS' ? '✅ Intent pre-validation passed' : `❌ Intent pre-validation failed: ${findings.length} issue(s)`);
+    return makeResult(intent, null, status, findings, summary);
+}
+//# sourceMappingURL=policyEngine.js.map

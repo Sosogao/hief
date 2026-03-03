@@ -52,8 +52,8 @@ const SERVICES = [
     name: 'reputation',
     port: 3005,
     dir: 'packages/reputation',
-    cmd: 'npx',
-    args: ['ts-node', '--project', 'tsconfig.json', 'src/api/server.ts'],
+    cmd: 'node',
+    args: ['dist/api/server.js'],
     env: { REPUTATION_PORT: '3005' },
     pathPrefixes: ['/v1/reputation'],
     healthPath: '/v1/reputation/health'

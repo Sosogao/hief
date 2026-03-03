@@ -1,8 +1,7 @@
 {
   "name": "@hief/nft-sync",
   "version": "0.1.0",
-  "description": "HIEF NFT Sync Daemon — auto-syncs off-chain reputation scores to on-chain ReputationNFT",
-  "type": "module",
+  "description": "HIEF NFT Sync Daemon \u2014 auto-syncs off-chain reputation scores to on-chain ReputationNFT",
   "scripts": {
     "dev": "tsx --watch src/server.ts",
     "start": "tsx src/server.ts",

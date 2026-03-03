@@ -1,8 +1,7 @@
 {
   "name": "@hief/solver-network",
   "version": "0.1.0",
-  "description": "HIEF Solver Network — multi-solver auction with best-quote selection",
-  "type": "module",
+  "description": "HIEF Solver Network \u2014 multi-solver auction with best-quote selection",
   "scripts": {
     "dev": "tsx --watch src/server.ts",
     "start": "tsx src/server.ts"
