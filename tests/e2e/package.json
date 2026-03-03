@@ -1,0 +1,22 @@
+{
+  "name": "@hief/e2e-tests",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "jest --passWithNoTests --forceExit"
+  },
+  "dependencies": {
+    "@hief/common": "workspace:*",
+    "@hief/policy": "workspace:*",
+    "@hief/solver": "workspace:*",
+    "ethers": "^6.16.0",
+    "supertest": "^6.3.4"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/supertest": "^6.0.2",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.3.0"
+  }
+}

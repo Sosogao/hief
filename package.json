@@ -1,0 +1,20 @@
+{
+  "name": "hief",
+  "version": "0.1.0",
+  "description": "Hybrid Intent Execution Framework - AI DeFi Intent Infrastructure",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "packages/solver-adapters/*"
+  ],
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "dev": "pnpm --filter @hief/bus dev",
+    "lint": "pnpm -r lint"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}

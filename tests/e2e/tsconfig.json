@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "paths": {
+      "@hief/common": ["../../packages/common/src"],
+      "@hief/policy": ["../../packages/policy/src"],
+      "@hief/solver": ["../../packages/solver/src"]
+    }
+  },
+  "include": ["./**/*.ts"],
+  "exclude": ["node_modules"]
+}

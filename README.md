@@ -119,3 +119,65 @@ HIEF 的核心护城河不在于某一项具体技术，而在于：
 ## 版本历史
 
 - `v0.1` (2026-03)：MVP 协议草案，支持单链 Swap Intent，集成 CoW/UniswapX。
+
+---
+
+## 代码实现（packages/）
+
+| 包 | 说明 | 端口 |
+|---|---|---|
+| `@hief/common` | 共享类型、EIP-712 Hash 工具、常量 | — |
+| `@hief/bus` | Intent Bus HTTP 服务（SQLite 状态机） | 3001 |
+| `@hief/policy` | Policy Engine（12条规则 + Tenderly Fork 模拟） | 3002 |
+| `@hief/solver` | CoW Protocol 适配器 + Safe 交易构建器 | 3003 |
+
+### 安装与运行
+
+```bash
+# 安装所有依赖
+pnpm install
+
+# 构建 common 包（其他包依赖它）
+cd packages/common && pnpm build
+
+# 运行全部测试
+pnpm test
+```
+
+### 测试结果
+
+```
+@hief/common    6/6  tests ✅
+@hief/policy    9/9  tests ✅
+@hief/solver    6/6  tests ✅
+e2e             15/15 tests ✅
+─────────────────────────────
+Total           36/36 tests ✅
+```
+
+### 端到端流程（已验证）
+
+```
+Intent 创建 → intentHash 计算
+    ↓
+Solver 构建 Solution（CoW Protocol 报价）
+    ↓
+Policy Engine 验证（12条规则）
+    ↓
+Safe Adapter 构建 MultiSend 交易（planHash 绑定）
+    ↓
+用户签名 → 上链执行
+```
+
+### 环境变量
+
+```bash
+# Policy Engine（可选，启用 Fork 模拟）
+TENDERLY_API_KEY=your_key
+TENDERLY_ACCOUNT=your_account
+TENDERLY_PROJECT=your_project
+
+# Solver
+BUS_URL=http://localhost:3001
+SOLVER_ID=0x...  # Solver 钱包地址
+```
