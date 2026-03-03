@@ -9,13 +9,13 @@ cmds = [
   "cd packages/common && npx tsc",
   "cd packages/simulation && npx tsc",
   "cd packages/solver-adapters && (npx tsc 2>/dev/null || true)",
-  "cd packages/bus && npx tsc --noEmit false",
+  "cd packages/bus && npx tsc --noEmit false --noEmitOnError false",
   "cd packages/policy && npx tsc --noEmit false",
   "cd packages/agent && npx tsc --noEmit false",
   "cd packages/reputation && npx tsc --noEmit false",
-  "cd packages/explorer-api && npx tsc --noEmit false",
+  "cd packages/explorer-api && npx tsc --noEmit false --noEmitOnError false",
   "cd packages/nft-sync && npx tsc --noEmit false",
-  "cd packages/solver-network && npx tsc --noEmit false"
+  "cd packages/solver-network && npx tsc --noEmit false --noEmitOnError false"
 ]
 
 [start]

@@ -233,7 +233,7 @@ intentsRouter.post('/:intentId/settle', (req: Request, res: Response) => {
         executedAt: intentData._settledAt,
         settlementTxHash: txHash,
       }),
-    }).then(r => r.json()).then(rj => {
+    }).then(r => r.json()).then((rj: any) => {
       console.log(`[BUS] Reputation updated: score=${rj.data?.newScore} tier=${rj.data?.riskTier}`);
     }).catch(err => {
       console.warn(`[BUS] Reputation API call failed: ${err.message}`);
