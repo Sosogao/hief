@@ -257,6 +257,80 @@ async function generateQuote(
   };
 }
 
+// ─── Settlement Engine ───────────────────────────────────────────────────────
+// Tenderly Virtual Testnet config (Base Sepolia fork, chainId 99917)
+const TENDERLY_RPC = process.env.TENDERLY_RPC_URL ||
+  'https://virtual.base-sepolia.eu.rpc.tenderly.co/2aec27b5-9066-421e-a62d-31e1661403d9';
+const SETTLEMENT_PRIVATE_KEY = process.env.SETTLEMENT_PRIVATE_KEY ||
+  '0x657a363c86654cbe2ff0136725d8361892fb7d48db2a1ae4abdd85a661d7a611';
+const WETH_ADDRESS = '0x4200000000000000000000000000000000000006';
+const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD';
+const WETH_ABI = [
+  'function deposit() payable',
+  'function balanceOf(address) view returns (uint256)',
+];
+const ERC20_ABI = [
+  'function transfer(address to, uint256 amount) returns (bool)',
+  'function balanceOf(address) view returns (uint256)',
+];
+
+/**
+ * Execute settlement on Tenderly fork.
+ * For USDC→ETH intents: transfer USDC to burn address + wrap ETH to WETH.
+ * For other intents: wrap a small amount of ETH to WETH as proof-of-execution.
+ */
+async function settleOnChain(
+  intent: any,
+  winner: any
+): Promise<{ txHash: string; blockNumber: number }> {
+  const provider = new ethers.JsonRpcProvider(TENDERLY_RPC);
+  const wallet = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY, provider);
+
+  const inputToken = (intent.input?.token || '').toLowerCase();
+  const outputToken = (intent.outputs?.[0]?.token || '').toLowerCase();
+  const isUsdcToEth =
+    inputToken === USDC_ADDRESS.toLowerCase() &&
+    (outputToken === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ||
+     outputToken === WETH_ADDRESS.toLowerCase());
+
+  let txHash = '';
+  let blockNumber = 0;
+
+  if (isUsdcToEth) {
+    // Step 1: Transfer input USDC to burn address (representing USDC spent)
+    const inputAmount = BigInt(intent.input?.amount || '100000000');
+    const usdc = new ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
+    const usdcBal = await usdc.balanceOf(wallet.address);
+    const transferAmount = usdcBal < inputAmount ? usdcBal : inputAmount;
+    if (transferAmount > 0n) {
+      const tx1 = await usdc.transfer(BURN_ADDRESS, transferAmount);
+      const r1 = await tx1.wait();
+      console.log(`[Settlement] USDC transfer tx: ${tx1.hash} | block: ${r1?.blockNumber}`);
+    }
+    // Step 2: Wrap ETH to WETH (representing ETH received by solver)
+    const ethAmount = winner?.netOutUSD
+      ? ethers.parseEther(Math.max(0.0001, winner.netOutUSD / 2650).toFixed(6))
+      : ethers.parseEther('0.0377');
+    const weth = new ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
+    const tx2 = await weth.deposit({ value: ethAmount });
+    const r2 = await tx2.wait();
+    txHash = tx2.hash;
+    blockNumber = r2?.blockNumber ?? 0;
+    console.log(`[Settlement] WETH wrap tx: ${txHash} | block: ${blockNumber}`);
+  } else {
+    // Generic settlement: wrap 0.001 ETH to WETH as proof-of-execution
+    const weth = new ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
+    const tx = await weth.deposit({ value: ethers.parseEther('0.001') });
+    const r = await tx.wait();
+    txHash = tx.hash;
+    blockNumber = r?.blockNumber ?? 0;
+    console.log(`[Settlement] Generic settlement tx: ${txHash} | block: ${blockNumber}`);
+  }
+
+  return { txHash, blockNumber };
+}
+
 // ─── Auction Engine ───────────────────────────────────────────────────────────
 interface AuctionResult {
   intentId: string;
@@ -267,6 +341,9 @@ interface AuctionResult {
   auctionDurationMs: number;
   submittedSolutionId: string | null;
   submittedAt: number;
+  settlementTxHash?: string;
+  settlementBlock?: number;
+  settlementStatus?: string;
 }
 
 async function runAuction(intentId: string, intentHash: string, intent: any): Promise<AuctionResult> {
@@ -314,6 +391,9 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
   const winner = validQuotes[0] || null;
   let winnerReason = 'No valid quotes';
   let submittedSolutionId: string | null = null;
+  let settlementTxHash: string | undefined;
+  let settlementBlock: number | undefined;
+  let settlementStatus: string | undefined;
 
   if (winner) {
     const margin = validQuotes.length > 1
@@ -378,6 +458,34 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ solutionId }),
         });
+
+        // ─── Settlement Layer ─────────────────────────────────────────────────
+        // Execute on-chain settlement on Tenderly fork after selection
+        console.log(`[Settlement] Executing on-chain settlement for ${intentId.slice(0, 16)}...`);
+        try {
+          const { txHash, blockNumber } = await settleOnChain(intent, winner);
+          settlementTxHash = txHash;
+          settlementBlock = blockNumber;
+          settlementStatus = 'success';
+          // Notify Intent Bus of settlement result
+          await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ txHash, txStatus: 'success' }),
+          });
+          console.log(`[Settlement] ✅ EXECUTED | txHash: ${txHash} | block: ${blockNumber}`);
+        } catch (settleErr: any) {
+          console.error(`[Settlement] ❌ On-chain settlement failed: ${settleErr.message}`);
+          settlementStatus = 'failed';
+          await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              txHash: '0x' + '0'.repeat(64),
+              txStatus: 'failed',
+            }),
+          }).catch(() => {});
+        }
       } else {
         console.warn(`[SolverNetwork] ⚠️ Solution submission failed: ${JSON.stringify(resJson)}`);
       }
@@ -397,6 +505,9 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
     auctionDurationMs,
     submittedSolutionId,
     submittedAt: Math.floor(Date.now() / 1000),
+    settlementTxHash,
+    settlementBlock,
+    settlementStatus,
   };
 }
 

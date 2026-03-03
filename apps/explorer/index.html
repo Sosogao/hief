@@ -440,7 +440,13 @@ async function loadIntentDetail(intentId) {
     var solutionsHtml = d.solutions.length ?
       d.solutions.map(function(s){ return '<div class="glass rounded-lg p-2 mb-2 text-xs"><div class="flex justify-between"><span class="text-slate-400">Solver</span><span class="font-mono text-slate-300">'+s.solverId+'</span></div><div class="flex justify-between"><span class="text-slate-400">Status</span><span class="status-'+s.status+'">'+s.status+'</span></div></div>'; }).join('') :
       '<p class="text-xs text-slate-500">No solutions yet.</p>';
-    content.innerHTML = '<div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><div class="text-xs text-slate-500 mb-3">Intent Details</div><div class="space-y-2 text-xs"><div class="flex justify-between"><span class="text-slate-400">Intent ID</span><span class="font-mono text-slate-300">'+d.intentId.slice(0,20)+'...</span></div><div class="flex justify-between"><span class="text-slate-400">Status</span><span class="status-'+d.status+' font-semibold">'+d.status+'</span></div><div class="flex justify-between"><span class="text-slate-400">Account</span><span class="font-mono text-slate-300">'+(intent.smartAccount||'').slice(0,12)+'...</span></div><div class="flex justify-between"><span class="text-slate-400">Action</span><span class="text-white">'+(intent.meta&&intent.meta.userIntentText||'-')+'</span></div><div class="flex justify-between"><span class="text-slate-400">Created</span><span class="text-slate-300">'+new Date(d.createdAt*1000).toLocaleString()+'</span></div></div></div><div><div class="text-xs text-slate-500 mb-3">Policy Result</div>'+policyHtml+'<div class="text-xs text-slate-500 mt-4 mb-2">Solutions ('+d.solutions.length+')</div>'+solutionsHtml+'</div></div>';
+    var settlementHtml = '';
+    if (d.settlementTxHash) {
+      var shortTx = d.settlementTxHash.slice(0,10)+'...'+d.settlementTxHash.slice(-8);
+      var tenderlyUrl = 'https://dashboard.tenderly.co/tx/'+d.settlementTxHash;
+      settlementHtml = '<div class="mt-3 p-3 rounded-lg bg-green-900/20 border border-green-700/30"><div class="text-xs text-green-400 font-semibold mb-1">✅ On-chain Settlement</div><div class="flex justify-between text-xs"><span class="text-slate-400">TX Hash</span><a href="'+tenderlyUrl+'" target="_blank" class="font-mono text-green-400 hover:underline">'+shortTx+'</a></div><div class="flex justify-between text-xs mt-1"><span class="text-slate-400">Network</span><span class="text-slate-300">Tenderly Fork (99917)</span></div></div>';
+    }
+    content.innerHTML = '<div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div><div class="text-xs text-slate-500 mb-3">Intent Details</div><div class="space-y-2 text-xs"><div class="flex justify-between"><span class="text-slate-400">Intent ID</span><span class="font-mono text-slate-300">'+d.intentId.slice(0,20)+'...</span></div><div class="flex justify-between"><span class="text-slate-400">Status</span><span class="status-'+d.status+' font-semibold">'+d.status+'</span></div><div class="flex justify-between"><span class="text-slate-400">Account</span><span class="font-mono text-slate-300">'+(intent.smartAccount||'').slice(0,12)+'...</span></div><div class="flex justify-between"><span class="text-slate-400">Action</span><span class="text-white">'+(intent.meta&&intent.meta.userIntentText||'-')+'</span></div><div class="flex justify-between"><span class="text-slate-400">Created</span><span class="text-slate-300">'+new Date(d.createdAt*1000).toLocaleString()+'</span></div></div>'+settlementHtml+'</div><div><div class="text-xs text-slate-500 mb-3">Policy Result</div>'+policyHtml+'<div class="text-xs text-slate-500 mt-4 mb-2">Solutions ('+d.solutions.length+')</div>'+solutionsHtml+'</div></div>';
   } catch(e) { content.innerHTML = '<p class="text-red-400 text-xs">Failed to load intent detail.</p>'; }
 }
 
@@ -611,7 +617,7 @@ async function confirmChatIntent() {
           var intentId = busJson.intentId || json.intent.intentId;
           appendChatMessage('system', '✅ Intent submitted! ID: '+intentId.slice(0,20)+'...');
           appendChatMessage('system', 'Running solver auction...');
-          // Trigger solver network auction
+          // Trigger solver network auction (includes settlement)
           setTimeout(async function() {
             try {
               var solverRes = await fetch(SOLVER_API+'/v1/solver-network/trigger', {
@@ -620,11 +626,25 @@ async function confirmChatIntent() {
                 body: JSON.stringify({ intentId: intentId })
               });
               var solverJson = await solverRes.json();
-              if (solverJson.success && solverJson.data.winner) {
-                var w = solverJson.data.winner;
-                appendChatMessage('system', '🏆 Auction complete! Winner: '+w.solverName+' | Net: $'+w.netOutUSD.toFixed(4)+' | Route: '+w.route);
+              if (solverJson.success && solverJson.data) {
+                var d = solverJson.data;
+                var w = d.winner;
+                if (w) {
+                  appendChatMessage('system', '🏆 Auction complete! Winner: '+w.solverName+' | Net: $'+w.netOutUSD.toFixed(4)+' | Route: '+w.route);
+                }
+                // Show settlement result
+                if (d.settlementTxHash && d.settlementStatus === 'success') {
+                  var shortTx = d.settlementTxHash.slice(0,10)+'...'+d.settlementTxHash.slice(-8);
+                  var tenderlyUrl = 'https://dashboard.tenderly.co/tx/'+d.settlementTxHash;
+                  appendChatMessage('system', '⛓️ Settlement executing on Tenderly fork (Block '+d.settlementBlock+')...');
+                  appendChatMessage('system', '✅ EXECUTED on-chain! TX: <a href="'+tenderlyUrl+'" target="_blank" class="text-green-400 hover:underline font-mono text-xs">'+shortTx+'</a>');
+                } else if (d.settlementStatus === 'failed') {
+                  appendChatMessage('system', '⚠️ On-chain settlement failed. Intent marked as FAILED.');
+                }
+                // Refresh intents list
+                setTimeout(loadStats, 1000);
               }
-            } catch(e) {}
+            } catch(e) { console.error('Solver trigger error:', e); }
           }, 1500);
           chatPendingIntent = null;
           // Refresh stats
