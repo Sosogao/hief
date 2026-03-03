@@ -1,0 +1,24 @@
+{
+  "name": "@hief/simulation",
+  "version": "0.1.0",
+  "description": "HIEF L4 Policy Layer: Tenderly Fork simulation and execution diff engine",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest --forceExit",
+    "test:real": "TENDERLY_REAL=true jest --forceExit --testPathPattern=real"
+  },
+  "dependencies": {
+    "@hief/common": "workspace:*",
+    "axios": "^1.6.0",
+    "ethers": "^6.9.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.0",
+    "@types/node": "^20.0.0",
+    "jest": "^29.5.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.3.0"
+  }
+}

@@ -1,7 +1,7 @@
 import type { HIEFIntent, HIEFSolution, HIEFPolicyResult, PolicyFinding, ExecutionDiff } from '@hief/common';
 import { computeIntentHash } from '@hief/common';
 import { runStaticRules } from '../rules/staticRules';
-import { simulateWithTenderly, buildExecutionDiff } from '../simulation/forkSimulator';
+import { runL4Simulation } from '../simulation/forkSimulator';
 
 function makeResult(
   intent: HIEFIntent,
@@ -61,24 +61,33 @@ export async function validateSolution(
   let simFailed = false;
 
   try {
-    const simResult = await simulateWithTenderly(intent, solution);
-    executionDiff = buildExecutionDiff(intent, solution, simResult);
+    const simResult = await runL4Simulation(solution);
 
-    if (simResult && !simResult.success) {
-      findings.push({
-        ruleId: 'SIM-1',
-        severity: 'CRITICAL',
-        message: `Fork simulation reverted: ${simResult.revertReason || 'unknown reason'}`,
-        evidence: { revertReason: simResult.revertReason },
-      });
+    if (simResult.status === 'FAIL') {
       simFailed = true;
-      summary.push(`❌ FAIL: Simulation reverted - ${simResult.revertReason}`);
-      return makeResult(intent, solution, 'FAIL', findings, summary, executionDiff);
+      for (const f of simResult.findings) {
+        findings.push({
+          ruleId: f.ruleId,
+          severity: f.severity as PolicyFinding['severity'],
+          message: f.message,
+          evidence: f.detail,
+        });
+      }
+      summary.push(`❌ FAIL: L4 simulation found ${simResult.findings.length} violation(s)`);
+      return makeResult(intent, solution, 'FAIL', findings, summary);
+    } else if (simResult.status === 'SKIP') {
+      // Graceful degradation — Tenderly not configured
+      findings.push({
+        ruleId: 'SIM-00',
+        severity: 'LOW',
+        message: simResult.findings[0]?.message ?? 'L4 simulation skipped',
+      });
     }
+    // PASS — no simulation findings to add
   } catch (err: any) {
     console.error('[POLICY] Simulation error:', err.message);
     findings.push({
-      ruleId: 'SIM-0',
+      ruleId: 'SIM-00',
       severity: 'LOW',
       message: `Fork simulation unavailable: ${err.message}`,
     });
