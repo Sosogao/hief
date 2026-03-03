@@ -56,8 +56,6 @@ const ethers_1 = require("ethers");
 const sql_js_1 = __importDefault(require("sql.js"));
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const url_1 = require("url");
-const __dirname = path.dirname((0, url_1.fileURLToPath)(import.meta.url));
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3007', 10);
 const REPUTATION_API = process.env.REPUTATION_API_URL || 'http://localhost:3005';

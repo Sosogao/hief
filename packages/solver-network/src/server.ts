@@ -23,10 +23,7 @@ import cors from 'cors';
 import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
-import { fileURLToPath } from 'url';
 import initSqlJs from 'sql.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);

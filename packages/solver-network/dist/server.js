@@ -60,8 +60,6 @@ const cors_1 = __importDefault(require("cors"));
 const ethers_1 = require("ethers");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
-const url_1 = require("url");
-const __dirname = path.dirname((0, url_1.fileURLToPath)(import.meta.url));
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);
 const BUS_URL = process.env.BUS_URL || 'http://localhost:3001';
