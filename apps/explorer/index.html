@@ -184,6 +184,7 @@
         <div class="flex items-center gap-2 ml-auto">
           <span class="text-xs text-slate-500">Session:</span>
           <span id="chatSessionId" class="text-xs text-indigo-400 font-mono">Not started</span>
+          <span id="chatSessionStatus" class="text-xs text-slate-500">Not started</span>
           <button onclick="startChatSession()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs">New Session</button>
         </div>
       </div>
@@ -505,7 +506,8 @@ function timeAgo(unixTs) {
 document.getElementById('addressInput').addEventListener('keydown', function(e) { if(e.key==='Enter') lookupAddress(); });
 
 // ─── AI Agent Chat Functions ──────────────────────────────────────────────────
-async function startChatSession() {
+async function startChatSession(retryCount) {
+  retryCount = retryCount || 0;
   var wallet = document.getElementById('chatWallet').value.trim();
   if (!wallet || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) { showError('Invalid wallet address'); return; }
   try {
@@ -514,13 +516,21 @@ async function startChatSession() {
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ smartAccount: wallet, chainId: CHAIN_ID })
     });
+    // If service is starting up (503), auto-retry up to 6 times (30s total)
+    if (res.status === 503 && retryCount < 6) {
+      document.getElementById('chatSessionStatus').textContent = 'Starting... ('+((retryCount+1)*5)+'s)';
+      await new Promise(function(r){ setTimeout(r, 5000); });
+      return startChatSession(retryCount + 1);
+    }
     var json = await res.json();
-    if (!res.ok) { showError('Failed to start session: '+(json.message||'unknown')); return; }
+    if (!res.ok) { showError('Failed to start session: '+(json.message||json.error||'unknown')); return; }
     chatSessionId = json.sessionId;
     document.getElementById('chatSessionId').textContent = chatSessionId.slice(0,12)+'...';
     document.getElementById('chatSessionId').title = chatSessionId;
+    document.getElementById('chatSessionStatus').textContent = 'Active';
+    document.getElementById('chatSessionStatus').style.color = '#4ade80';
     appendChatMessage('system', 'Session started. Wallet: '+wallet.slice(0,8)+'...'+wallet.slice(-4)+' | Chain: '+CHAIN_ID);
-  } catch(e) { showError('Agent API unavailable (port 3004)'); }
+  } catch(e) { showError('Agent service is starting up — please wait a few seconds and try again.'); }
 }
 
 function setChatInput(text) {
@@ -565,7 +575,7 @@ async function sendChatMessage() {
     if (e.name === 'AbortError') {
       appendChatMessage('agent', '⏱️ Request timed out (90s). The AI is still processing — please try again.');
     } else {
-      appendChatMessage('agent', 'Agent API is unavailable. Please ensure the service is running on port 3004.');
+      appendChatMessage('agent', 'Agent service unavailable. Please try again in a few seconds.');
     }
   }
   setChatLoading(false);
@@ -623,7 +633,7 @@ async function confirmChatIntent() {
           appendChatMessage('system', '⚠️ Submission failed: '+(busJson.message||JSON.stringify(busJson)));
         }
       } catch(e) {
-        appendChatMessage('system', '⚠️ Could not reach Intent Bus (port 3001).');
+        appendChatMessage('system', '⚠️ Could not reach Intent Bus. Please try again.');
       }
     }
   } catch(e) { appendChatMessage('agent', 'Error confirming intent.'); }

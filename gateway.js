@@ -200,8 +200,15 @@ const proxy = httpProxy.createProxyServer({ ws: true });
 proxy.on('error', (err, req, res) => {
   console.error('[gateway] Proxy error:', err.message);
   if (res && !res.headersSent) {
-    res.writeHead(502, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ error: 'Service unavailable', message: err.message }));
+    const isConnRefused = err.code === 'ECONNREFUSED';
+    res.writeHead(503, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: isConnRefused ? 'Service starting up' : 'Service unavailable',
+      message: isConnRefused
+        ? 'This service is still starting. Please wait a few seconds and try again.'
+        : err.message,
+      retryAfter: 5
+    }));
   }
 });
 
@@ -313,11 +320,13 @@ async function main() {
     startService(svc);
   }
 
-  // Wait for critical services (bus, reputation) before opening gateway
+  // Wait for critical services before opening gateway
   console.log('[gateway] Waiting for critical services...');
   await Promise.all([
     waitForService(SERVICES.find(s => s.name === 'bus'), 90000),
     waitForService(SERVICES.find(s => s.name === 'reputation'), 90000),
+    waitForService(SERVICES.find(s => s.name === 'agent'), 120000),
+    waitForService(SERVICES.find(s => s.name === 'explorer-api'), 90000),
   ]);
 
   // Start gateway
