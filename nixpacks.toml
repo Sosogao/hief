@@ -1,0 +1,20 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = ["npm install -g pnpm@9", "pnpm install --frozen-lockfile"]
+
+[phases.build]
+cmds = [
+  "cd packages/common && npx tsc",
+  "cd packages/bus && npx tsc --noEmit false",
+  "cd packages/policy && npx tsc --noEmit false",
+  "cd packages/agent && npx tsc --noEmit false",
+  "cd packages/reputation && npx tsc --noEmit false",
+  "cd packages/explorer-api && npx tsc --noEmit false",
+  "cd packages/nft-sync && npx tsc --noEmit false",
+  "cd packages/solver-network && npx tsc --noEmit false"
+]
+
+[start]
+cmd = "node gateway.js"

@@ -101,6 +101,32 @@ const SERVICES = [
   }
 ];
 
+// ─── Build Common Package ───────────────────────────────────────────────────
+async function buildCommon() {
+  const commonDist = path.join(__dirname, 'packages/common/dist/index.js');
+  if (fs.existsSync(commonDist)) {
+    console.log('[gateway] @hief/common: dist already exists, skipping');
+    return;
+  }
+  console.log('[gateway] Building @hief/common (shared types)...');
+  return new Promise((resolve, reject) => {
+    const proc = spawn('npx', ['tsc'], {
+      cwd: path.join(__dirname, 'packages/common'),
+      stdio: 'inherit',
+      env: { ...process.env, PATH: process.env.PATH }
+    });
+    proc.on('close', (code) => {
+      if (code === 0) {
+        console.log('[gateway] @hief/common: build OK');
+        resolve();
+      } else {
+        console.error('[gateway] @hief/common: build FAILED — services may not start');
+        resolve(); // Don't abort gateway startup
+      }
+    });
+  });
+}
+
 // ─── Build Services ───────────────────────────────────────────────────────────
 async function buildService(svc) {
   const distDir = path.join(__dirname, svc.dir, 'dist');
@@ -309,6 +335,9 @@ const server = http.createServer((req, res) => {
 async function main() {
   console.log('[gateway] HIEF Platform Gateway starting...');
   console.log(`[gateway] Gateway port: ${GATEWAY_PORT}`);
+
+  // Build @hief/common first (required by all other services)
+  await buildCommon();
 
   // Build compiled services
   for (const svc of SERVICES) {
