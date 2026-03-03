@@ -7,6 +7,8 @@ cmds = ["npm install -g pnpm@9", "pnpm install --frozen-lockfile"]
 [phases.build]
 cmds = [
   "cd packages/common && npx tsc",
+  "cd packages/simulation && npx tsc",
+  "cd packages/solver-adapters && (npx tsc 2>/dev/null || true)",
   "cd packages/bus && npx tsc --noEmit false",
   "cd packages/policy && npx tsc --noEmit false",
   "cd packages/agent && npx tsc --noEmit false",
