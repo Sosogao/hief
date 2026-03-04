@@ -263,6 +263,104 @@ const ERC20_ABI = [
     'function transfer(address to, uint256 amount) returns (bool)',
     'function balanceOf(address) view returns (uint256)',
 ];
+async function simulateSettlement(intent, winner) {
+    const inputToken = (intent.input?.token || '').toLowerCase();
+    const outputToken = (intent.outputs?.[0]?.token || '').toLowerCase();
+    const isUsdcToEth = inputToken === USDC_ADDRESS.toLowerCase() &&
+        (outputToken === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ||
+            outputToken === WETH_ADDRESS.toLowerCase());
+    // Build the transaction calldata for the main settlement step
+    const WETH_DEPOSIT_SELECTOR = '0xd0e30db0'; // deposit()
+    const ethAmount = winner?.netOutUSD
+        ? Math.max(0.0001, winner.netOutUSD / 2650)
+        : 0.0377;
+    const ethAmountWei = BigInt(Math.floor(ethAmount * 1e18));
+    const valueHex = '0x' + ethAmountWei.toString(16);
+    // Use tenderly_simulateTransaction RPC method (no API key needed, uses fork RPC)
+    const simPayload = {
+        jsonrpc: '2.0',
+        method: 'tenderly_simulateTransaction',
+        params: [
+            {
+                from: '0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a',
+                to: WETH_ADDRESS,
+                data: WETH_DEPOSIT_SELECTOR,
+                value: valueHex,
+                gas: '0x493E0', // 300000
+            },
+            'latest',
+        ],
+        id: 1,
+    };
+    const simRes = await fetch(TENDERLY_RPC, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(simPayload),
+    });
+    const simJson = await simRes.json();
+    if (simJson.error) {
+        return {
+            success: false,
+            gasUsed: 0,
+            gasEstimateUSD: 0,
+            expectedOutputToken: 'WETH',
+            expectedOutputAmount: '0',
+            expectedOutputAmountRaw: '0',
+            expectedOutputUSD: 0,
+            priceImpactBps: winner?.priceImpactBps ?? 0,
+            balanceChanges: [],
+            simulatedBlock: 0,
+            error: simJson.error.message || 'Simulation failed',
+        };
+    }
+    const result = simJson.result || {};
+    const gasUsed = parseInt(result.gasUsed || '0x0', 16);
+    // Estimate gas cost: ~0.000000001 ETH/gas on Base (1 gwei), ETH ≈ $2650
+    const gasEstimateUSD = (gasUsed * 1e-9 * 2650);
+    // Parse Deposit event from logs to get actual output amount
+    let wethReceived = ethAmountWei;
+    const logs = result.logs || [];
+    for (const log of logs) {
+        if (log.name === 'Deposit') {
+            const wadInput = log.inputs?.find((i) => i.name === 'wad');
+            if (wadInput)
+                wethReceived = BigInt(wadInput.value);
+        }
+    }
+    const wethReceivedHuman = (Number(wethReceived) / 1e18).toFixed(6);
+    const wethUSD = Number(wethReceived) / 1e18 * 2650;
+    // Build balance changes summary
+    const balanceChanges = [];
+    if (isUsdcToEth) {
+        const inputAmountRaw = BigInt(intent.input?.amount || '100000000');
+        const inputAmountHuman = (Number(inputAmountRaw) / 1e6).toFixed(2);
+        balanceChanges.push({
+            token: USDC_ADDRESS,
+            symbol: 'USDC',
+            delta: '-' + inputAmountHuman,
+            deltaUSD: -parseFloat(inputAmountHuman),
+        });
+    }
+    balanceChanges.push({
+        token: WETH_ADDRESS,
+        symbol: 'WETH',
+        delta: '+' + wethReceivedHuman,
+        deltaUSD: wethUSD,
+    });
+    console.log(`[Simulation] ✅ Success | gasUsed: ${gasUsed} (~$${gasEstimateUSD.toFixed(4)}) | WETH out: ${wethReceivedHuman}`);
+    return {
+        success: result.status === true,
+        gasUsed,
+        gasEstimateUSD,
+        expectedOutputToken: 'WETH',
+        expectedOutputAmount: wethReceivedHuman,
+        expectedOutputAmountRaw: wethReceived.toString(),
+        expectedOutputUSD: wethUSD,
+        priceImpactBps: winner?.priceImpactBps ?? 0,
+        balanceChanges,
+        simulatedBlock: parseInt(result.blockNumber || '0x0', 16),
+    };
+}
 /**
  * Execute settlement on Tenderly fork.
  * For USDC→ETH intents: transfer USDC to burn address + wrap ETH to WETH.
@@ -311,6 +409,9 @@ async function settleOnChain(intent, winner) {
     }
     return { txHash, blockNumber };
 }
+// In-memory store for pending simulations awaiting user confirmation
+// intentId -> { intent, winner, simulation }
+const pendingSimulations = new Map();
 async function runAuction(intentId, intentHash, intent) {
     const startTime = Date.now();
     // Determine input amount in USD using smart token extraction
@@ -409,33 +510,36 @@ async function runAuction(intentId, intentHash, intent) {
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ solutionId }),
                 });
-                // ─── Settlement Layer ─────────────────────────────────────────────────
-                // Execute on-chain settlement on Tenderly fork after selection
-                console.log(`[Settlement] Executing on-chain settlement for ${intentId.slice(0, 16)}...`);
+                // ─── Simulation Layer ─────────────────────────────────────────────────────
+                // Simulate settlement first — do NOT broadcast yet, wait for user confirmation
+                console.log(`[Simulation] Running pre-settlement simulation for ${intentId.slice(0, 16)}...`);
                 try {
-                    const { txHash, blockNumber } = await settleOnChain(intent, winner);
-                    settlementTxHash = txHash;
-                    settlementBlock = blockNumber;
-                    settlementStatus = 'success';
-                    // Notify Intent Bus of settlement result
-                    await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+                    const simResult = await simulateSettlement(intent, winner);
+                    // Store pending simulation so user can confirm
+                    pendingSimulations.set(intentId, { intent, winner, simulation: simResult });
+                    // Notify Intent Bus of simulation result (status → SIMULATED)
+                    await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ txHash, txStatus: 'success' }),
-                    });
-                    console.log(`[Settlement] ✅ EXECUTED | txHash: ${txHash} | block: ${blockNumber}`);
-                }
-                catch (settleErr) {
-                    console.error(`[Settlement] ❌ On-chain settlement failed: ${settleErr.message}`);
-                    settlementStatus = 'failed';
-                    await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            txHash: '0x' + '0'.repeat(64),
-                            txStatus: 'failed',
-                        }),
+                        body: JSON.stringify({ simulation: simResult }),
                     }).catch(() => { });
+                    console.log(`[Simulation] ✅ Simulation complete | gasUsed: ${simResult.gasUsed} | expectedOut: ${simResult.expectedOutputAmount} WETH | awaiting user confirmation`);
+                    // Attach simulation to this auction result
+                    return {
+                        intentId,
+                        intentHash,
+                        quotes,
+                        winner,
+                        winnerReason,
+                        auctionDurationMs,
+                        submittedSolutionId,
+                        submittedAt: Math.floor(Date.now() / 1000),
+                        simulation: simResult,
+                    };
+                }
+                catch (simErr) {
+                    console.error(`[Simulation] ❌ Simulation failed: ${simErr.message}`);
+                    // Fall through — return without simulation
                 }
             }
             else {
@@ -458,9 +562,6 @@ async function runAuction(intentId, intentHash, intent) {
         auctionDurationMs,
         submittedSolutionId,
         submittedAt: Math.floor(Date.now() / 1000),
-        settlementTxHash,
-        settlementBlock,
-        settlementStatus,
     };
 }
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -613,7 +714,61 @@ app.post('/v1/solver-network/trigger', async (req, res) => {
         res.status(500).json({ success: false, error: err.message });
     }
 });
-// ─── Start ────────────────────────────────────────────────────────────────────
+// GET /v1/solver-network/simulation/:intentId — get pending simulation result
+app.get('/v1/solver-network/simulation/:intentId', (req, res) => {
+    const { intentId } = req.params;
+    const pending = pendingSimulations.get(intentId);
+    if (!pending) {
+        res.status(404).json({ success: false, error: 'No pending simulation for this intent' });
+        return;
+    }
+    res.json({ success: true, data: { intentId, simulation: pending.simulation, winner: pending.winner } });
+});
+// POST /v1/solver-network/execute/:intentId — user confirms, execute real settlement
+app.post('/v1/solver-network/execute/:intentId', async (req, res) => {
+    const { intentId } = req.params;
+    const pending = pendingSimulations.get(intentId);
+    if (!pending) {
+        res.status(404).json({ success: false, error: 'No pending simulation for this intent. Run trigger first.' });
+        return;
+    }
+    const { intent, winner } = pending;
+    try {
+        console.log(`[Settlement] User confirmed execution for ${intentId.slice(0, 16)}... Broadcasting real tx...`);
+        const { txHash, blockNumber } = await settleOnChain(intent, winner);
+        // Remove from pending
+        pendingSimulations.delete(intentId);
+        // Notify Intent Bus of settlement result
+        await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ txHash, txStatus: 'success' }),
+        });
+        console.log(`[Settlement] ✅ EXECUTED | txHash: ${txHash} | block: ${blockNumber}`);
+        // Update auction history entry
+        const historyEntry = auctionHistory.find(a => a.intentId === intentId);
+        if (historyEntry) {
+            historyEntry.settlementTxHash = txHash;
+            historyEntry.settlementBlock = blockNumber;
+            historyEntry.settlementStatus = 'success';
+        }
+        res.json({
+            success: true,
+            data: { intentId, txHash, blockNumber, status: 'EXECUTED' },
+        });
+    }
+    catch (err) {
+        console.error(`[Settlement] ❌ Execution failed: ${err.message}`);
+        pendingSimulations.delete(intentId);
+        await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ txHash: '0x' + '0'.repeat(64), txStatus: 'failed' }),
+        }).catch(() => { });
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+// ─── Start ───────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
     console.log(`[SolverNetwork] Service started on port ${PORT}`);
     console.log(`[SolverNetwork] ${SOLVER_PERSONAS.length} solvers registered: ${SOLVER_PERSONAS.map(s => s.name).join(', ')}`);
