@@ -24,10 +24,13 @@ import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
 import initSqlJs from 'sql.js';
+import { detectAccountMode, proposeSafeMultisig, type AccountInfo, type SafeProposalResult } from './safeMultisig';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);
 const BUS_URL = process.env.BUS_URL || 'http://localhost:3001';
+const TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.base-sepolia.eu.rpc.tenderly.co/2aec27b5-9066-421e-a62d-31e1661403d9';
+const SETTLEMENT_CHAIN_ID = parseInt(process.env.SETTLEMENT_CHAIN_ID || '99917', 10);
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '15000', 10);
 
 // Load .env
@@ -472,6 +475,11 @@ interface AuctionResult {
   submittedAt: number;
   // Simulation result (populated after auction, before user confirmation)
   simulation?: SimulationResult;
+  // Execution mode: DIRECT (single-owner) or MULTISIG (Safe threshold ≥ 2)
+  executionMode?: 'DIRECT' | 'MULTISIG';
+  accountInfo?: AccountInfo;
+  // Multisig proposal (populated when executionMode === 'MULTISIG')
+  multisigProposal?: SafeProposalResult & { threshold: number };
   // Settlement result (populated after user confirms execution)
   settlementTxHash?: string;
   settlementBlock?: number;
@@ -479,8 +487,13 @@ interface AuctionResult {
 }
 
 // In-memory store for pending simulations awaiting user confirmation
-// intentId -> { intent, winner, simulation }
-const pendingSimulations = new Map<string, { intent: any; winner: SolverQuote; simulation: SimulationResult }>();
+// intentId -> { intent, winner, simulation, accountInfo }
+const pendingSimulations = new Map<string, {
+  intent: any;
+  winner: SolverQuote;
+  simulation: SimulationResult;
+  accountInfo?: AccountInfo;
+}>();
 
 async function runAuction(intentId: string, intentHash: string, intent: any): Promise<AuctionResult> {
   const startTime = Date.now();
@@ -596,31 +609,90 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
         });
 
         // ─── Simulation Layer ─────────────────────────────────────────────────────
-        // Simulate settlement first — do NOT broadcast yet, wait for user confirmation
-        console.log(`[Simulation] Running pre-settlement simulation for ${intentId.slice(0, 16)}...`);
+        // Step 1: Detect account execution mode (DIRECT vs MULTISIG)
+        const smartAccount = intent.sender || intent.smartAccount || '';
+        let accountInfo: AccountInfo | undefined;
+        let executionMode: 'DIRECT' | 'MULTISIG' = 'DIRECT';
+        if (smartAccount && smartAccount.startsWith('0x')) {
+          try {
+            accountInfo = await detectAccountMode(smartAccount, TENDERLY_RPC_URL, SETTLEMENT_CHAIN_ID);
+            executionMode = accountInfo.mode;
+            console.log(`[SolverNetwork] Account mode: ${executionMode} | threshold: ${accountInfo.threshold} | isSafe: ${accountInfo.isSafe}`);
+          } catch (modeErr: any) {
+            console.warn(`[SolverNetwork] Account mode detection failed, defaulting to DIRECT: ${modeErr.message}`);
+          }
+        }
+
+        // Step 2: Simulate settlement (both modes run simulation first)
+        console.log(`[Simulation] Running pre-settlement simulation for ${intentId.slice(0, 16)}... (mode: ${executionMode})`);
         try {
           const simResult = await simulateSettlement(intent, winner);
-          // Store pending simulation so user can confirm
-          pendingSimulations.set(intentId, { intent, winner, simulation: simResult });
-          // Notify Intent Bus of simulation result (status → SIMULATED)
-          await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ simulation: simResult }),
-          }).catch(() => {});
-          console.log(`[Simulation] ✅ Simulation complete | gasUsed: ${simResult.gasUsed} | expectedOut: ${simResult.expectedOutputAmount} WETH | awaiting user confirmation`);
-          // Attach simulation to this auction result
-          return {
-            intentId,
-            intentHash,
-            quotes,
-            winner,
-            winnerReason,
-            auctionDurationMs,
-            submittedSolutionId,
-            submittedAt: Math.floor(Date.now() / 1000),
-            simulation: simResult,
-          };
+
+          if (executionMode === 'MULTISIG' && accountInfo?.isSafe) {
+            // ─── MULTISIG MODE ────────────────────────────────────────────────────
+            // Propose Safe transaction — AI proposes, co-signers must approve
+            console.log(`[SafeMultisig] Proposing Safe TX for ${intentId.slice(0, 16)}... | threshold: ${accountInfo.threshold}`);
+            let multisigProposal: (SafeProposalResult & { threshold: number }) | undefined;
+            try {
+              // Build settlement calldata (WETH wrap as representative tx)
+              const wethInterface = new ethers.Interface(['function deposit() payable']);
+              const depositData = wethInterface.encodeFunctionData('deposit', []);
+              const proposal = await proposeSafeMultisig({
+                safeAddress: smartAccount,
+                chainId: SETTLEMENT_CHAIN_ID,
+                rpcUrl: TENDERLY_RPC_URL,
+                proposerPrivateKey: SETTLEMENT_PRIVATE_KEY,
+                to: WETH_ADDRESS,
+                value: ethers.parseEther('0.001').toString(),
+                data: depositData,
+                intentId,
+              });
+              multisigProposal = { ...proposal, threshold: accountInfo.threshold };
+              // Store pending simulation with multisig context
+              pendingSimulations.set(intentId, { intent, winner, simulation: simResult, accountInfo });
+              // Notify Intent Bus: simulation + multisig proposal
+              await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  simulation: simResult,
+                  executionMode: 'MULTISIG',
+                  multisigProposal,
+                }),
+              }).catch(() => {});
+              console.log(`[SafeMultisig] ✅ Proposal ready | safeTxHash: ${multisigProposal.safeTxHash.slice(0, 16)}... | threshold: ${accountInfo.threshold} | awaiting co-signatures`);
+            } catch (msErr: any) {
+              console.error(`[SafeMultisig] ❌ Proposal failed: ${msErr.message}. Falling back to DIRECT mode.`);
+              executionMode = 'DIRECT';
+              pendingSimulations.set(intentId, { intent, winner, simulation: simResult, accountInfo });
+              await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ simulation: simResult, executionMode: 'DIRECT' }),
+              }).catch(() => {});
+            }
+            return {
+              intentId, intentHash, quotes, winner, winnerReason, auctionDurationMs,
+              submittedSolutionId, submittedAt: Math.floor(Date.now() / 1000),
+              simulation: simResult, executionMode: 'MULTISIG', accountInfo, multisigProposal,
+            };
+          } else {
+            // ─── DIRECT MODE ──────────────────────────────────────────────────────
+            // Store pending simulation so user can confirm
+            pendingSimulations.set(intentId, { intent, winner, simulation: simResult, accountInfo });
+            // Notify Intent Bus of simulation result
+            await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ simulation: simResult, executionMode: 'DIRECT' }),
+            }).catch(() => {});
+            console.log(`[Simulation] ✅ Simulation complete | gasUsed: ${simResult.gasUsed} | expectedOut: ${simResult.expectedOutputAmount} WETH | mode: DIRECT | awaiting user confirmation`);
+            return {
+              intentId, intentHash, quotes, winner, winnerReason, auctionDurationMs,
+              submittedSolutionId, submittedAt: Math.floor(Date.now() / 1000),
+              simulation: simResult, executionMode: 'DIRECT', accountInfo,
+            };
+          }
         } catch (simErr: any) {
           console.error(`[Simulation] ❌ Simulation failed: ${simErr.message}`);
           // Fall through — return without simulation
@@ -813,10 +885,20 @@ app.get('/v1/solver-network/simulation/:intentId', (req: Request, res: Response)
     res.status(404).json({ success: false, error: 'No pending simulation for this intent' });
     return;
   }
-  res.json({ success: true, data: { intentId, simulation: pending.simulation, winner: pending.winner } });
+  res.json({
+    success: true,
+    data: {
+      intentId,
+      simulation: pending.simulation,
+      winner: pending.winner,
+      accountInfo: pending.accountInfo,
+      executionMode: pending.accountInfo?.mode || 'DIRECT',
+    },
+  });
 });
 
 // POST /v1/solver-network/execute/:intentId — user confirms, execute real settlement
+// Works for both DIRECT mode (broadcasts immediately) and MULTISIG mode (marks as PENDING_SIGNATURES)
 app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Response) => {
   const { intentId } = req.params;
   const pending = pendingSimulations.get(intentId);
@@ -824,38 +906,127 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
     res.status(404).json({ success: false, error: 'No pending simulation for this intent. Run trigger first.' });
     return;
   }
-  const { intent, winner } = pending;
+  const { intent, winner, accountInfo } = pending;
+  const isMultisig = accountInfo?.mode === 'MULTISIG' && accountInfo?.isSafe;
+
+  if (isMultisig) {
+    // ─── MULTISIG MODE: Propose Safe TX, wait for co-signatures ──────────────────────────────
+    try {
+      console.log(`[SafeMultisig] User confirmed multisig proposal for ${intentId.slice(0, 16)}... Proposing Safe TX...`);
+      const wethInterface = new ethers.Interface(['function deposit() payable']);
+      const depositData = wethInterface.encodeFunctionData('deposit', []);
+      const proposal = await proposeSafeMultisig({
+        safeAddress: accountInfo.address,
+        chainId: SETTLEMENT_CHAIN_ID,
+        rpcUrl: TENDERLY_RPC_URL,
+        proposerPrivateKey: SETTLEMENT_PRIVATE_KEY,
+        to: WETH_ADDRESS,
+        value: ethers.parseEther('0.001').toString(),
+        data: depositData,
+        intentId,
+      });
+      const multisigProposal = { ...proposal, threshold: accountInfo.threshold };
+      pendingSimulations.delete(intentId);
+      // Notify Intent Bus: status → PENDING_SIGNATURES
+      await fetch(`${BUS_URL}/v1/intents/${intentId}/multisig-propose`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ multisigProposal }),
+      }).catch(() => {});
+      // Update auction history
+      const historyEntry = auctionHistory.find(a => a.intentId === intentId);
+      if (historyEntry) { historyEntry.multisigProposal = multisigProposal; historyEntry.executionMode = 'MULTISIG'; }
+      console.log(`[SafeMultisig] ✅ Proposal submitted | safeTxHash: ${multisigProposal.safeTxHash.slice(0, 16)}... | threshold: ${accountInfo.threshold}`);
+      res.json({
+        success: true,
+        data: {
+          intentId,
+          executionMode: 'MULTISIG',
+          status: 'PENDING_SIGNATURES',
+          safeTxHash: multisigProposal.safeTxHash,
+          threshold: accountInfo.threshold,
+          owners: accountInfo.owners,
+          signingUrl: multisigProposal.signingUrl,
+          safeServiceUrl: multisigProposal.safeServiceUrl,
+        },
+      });
+    } catch (err: any) {
+      console.error(`[SafeMultisig] ❌ Proposal failed: ${err.message}`);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  } else {
+    // ─── DIRECT MODE: Broadcast immediately ────────────────────────────────────────────────────
+    try {
+      console.log(`[Settlement] User confirmed DIRECT execution for ${intentId.slice(0, 16)}... Broadcasting real tx...`);
+      const { txHash, blockNumber } = await settleOnChain(intent, winner);
+      pendingSimulations.delete(intentId);
+      await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash, txStatus: 'success' }),
+      });
+      console.log(`[Settlement] ✅ EXECUTED | txHash: ${txHash} | block: ${blockNumber}`);
+      const historyEntry = auctionHistory.find(a => a.intentId === intentId);
+      if (historyEntry) {
+        historyEntry.settlementTxHash = txHash;
+        historyEntry.settlementBlock = blockNumber;
+        historyEntry.settlementStatus = 'success';
+        historyEntry.executionMode = 'DIRECT';
+      }
+      res.json({
+        success: true,
+        data: { intentId, executionMode: 'DIRECT', txHash, blockNumber, status: 'EXECUTED' },
+      });
+    } catch (err: any) {
+      console.error(`[Settlement] ❌ Execution failed: ${err.message}`);
+      pendingSimulations.delete(intentId);
+      await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash: '0x' + '0'.repeat(64), txStatus: 'failed' }),
+      }).catch(() => {});
+      res.status(500).json({ success: false, error: err.message });
+    }
+  }
+});
+
+// POST /v1/solver-network/multisig-confirm/:intentId — co-signer confirmed, execute the Safe TX on-chain
+// Called after all required signatures are collected (or for testing: force-execute)
+app.post('/v1/solver-network/multisig-confirm/:intentId', async (req: Request, res: Response) => {
+  const { intentId } = req.params;
+  // For the Tenderly fork demo: we execute the settlement tx directly since Safe TX Service
+  // can't execute on a virtual testnet. In production this would relay via Safe Relay.
   try {
-    console.log(`[Settlement] User confirmed execution for ${intentId.slice(0, 16)}... Broadcasting real tx...`);
-    const { txHash, blockNumber } = await settleOnChain(intent, winner);
-    // Remove from pending
-    pendingSimulations.delete(intentId);
-    // Notify Intent Bus of settlement result
+    // Re-fetch intent from bus to get the stored multisig proposal
+    const detailRes = await fetch(`http://localhost:3006/v1/explorer/intents/${intentId}`);
+    if (!detailRes.ok) {
+      res.status(404).json({ success: false, error: 'Intent not found' });
+      return;
+    }
+    const detail = await detailRes.json() as any;
+    const intentData = detail.data;
+    const intent = intentData?.intent || {};
+    // Execute on Tenderly fork (simulating Safe execution)
+    const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+    const wallet = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY, provider);
+    const wethContract = new ethers.Contract(WETH_ADDRESS, ['function deposit() payable'], wallet);
+    const tx = await wethContract.deposit({ value: ethers.parseEther('0.001') });
+    const receipt = await tx.wait();
+    const txHash = receipt?.hash || tx.hash;
+    const blockNumber = receipt?.blockNumber || 0;
+    // Notify Intent Bus: EXECUTED
     await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ txHash, txStatus: 'success' }),
     });
-    console.log(`[Settlement] ✅ EXECUTED | txHash: ${txHash} | block: ${blockNumber}`);
-    // Update auction history entry
-    const historyEntry = auctionHistory.find(a => a.intentId === intentId);
-    if (historyEntry) {
-      historyEntry.settlementTxHash = txHash;
-      historyEntry.settlementBlock = blockNumber;
-      historyEntry.settlementStatus = 'success';
-    }
+    console.log(`[SafeMultisig] ✅ Multisig EXECUTED | txHash: ${txHash} | block: ${blockNumber}`);
     res.json({
       success: true,
-      data: { intentId, txHash, blockNumber, status: 'EXECUTED' },
+      data: { intentId, executionMode: 'MULTISIG', txHash, blockNumber, status: 'EXECUTED' },
     });
   } catch (err: any) {
-    console.error(`[Settlement] ❌ Execution failed: ${err.message}`);
-    pendingSimulations.delete(intentId);
-    await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ txHash: '0x' + '0'.repeat(64), txStatus: 'failed' }),
-    }).catch(() => {});
+    console.error(`[SafeMultisig] ❌ Multisig execution failed: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   }
 });

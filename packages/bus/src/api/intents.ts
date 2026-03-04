@@ -291,3 +291,95 @@ intentsRouter.post('/:intentId/settle', (req: Request, res: Response) => {
     settledAt: intentData._settledAt,
   });
 });
+
+// POST /intents/:intentId/multisig-propose - Store Safe multisig proposal and mark as PENDING_SIGNATURES
+// Called by Solver Network after proposing a Safe TX to the Safe Transaction Service.
+intentsRouter.post('/:intentId/multisig-propose', (req: Request, res: Response) => {
+  const { intentId } = req.params;
+  const { multisigProposal } = req.body;
+  if (!multisigProposal || !multisigProposal.safeTxHash) {
+    return res.status(400).json({ errorCode: 'MISSING_PROPOSAL', message: 'multisigProposal with safeTxHash is required' });
+  }
+  const db = getDb();
+  const intentRow = dbGet<{ status: string; data: string }>(
+    db, 'SELECT status, data FROM intents WHERE id = ?', [intentId]
+  );
+  if (!intentRow) {
+    return res.status(404).json({ errorCode: 'INTENT_NOT_FOUND', message: `Intent ${intentId} not found` });
+  }
+  if (isTerminalIntentStatus(intentRow.status as any)) {
+    return res.status(400).json({
+      errorCode: 'INTENT_ALREADY_TERMINAL',
+      message: `Intent is already in terminal state: ${intentRow.status}`,
+    });
+  }
+  // Store multisig proposal data in intent JSON
+  let intentData: any = {};
+  try { intentData = JSON.parse(intentRow.data); } catch { /* ignore */ }
+  intentData._executionMode = 'MULTISIG';
+  intentData._multisigProposal = multisigProposal;
+  intentData._pendingSignaturesAt = Math.floor(Date.now() / 1000);
+
+  // Update status to PROPOSING (maps to PENDING_SIGNATURES in UI)
+  dbRun(db,
+    `UPDATE intents SET status = 'PROPOSING', data = ?, updated_at = strftime('%s','now') WHERE id = ?`,
+    [JSON.stringify(intentData), intentId]
+  );
+  console.log(`[BUS] 🔐 Intent ${intentId.slice(0, 16)}... multisig proposal stored | safeTxHash: ${multisigProposal.safeTxHash.slice(0, 16)}... | threshold: ${multisigProposal.threshold}`);
+  return res.json({
+    intentId,
+    status: 'PROPOSING',
+    executionMode: 'MULTISIG',
+    safeTxHash: multisigProposal.safeTxHash,
+    threshold: multisigProposal.threshold,
+    signingUrl: multisigProposal.signingUrl,
+    pendingSignaturesAt: intentData._pendingSignaturesAt,
+  });
+});
+
+// GET /intents/:intentId/multisig-status - Poll the Safe Transaction Service for signature count
+// Returns current signers, required threshold, and whether the TX is ready to execute.
+intentsRouter.get('/:intentId/multisig-status', async (req: Request, res: Response) => {
+  const { intentId } = req.params;
+  const db = getDb();
+  const intentRow = dbGet<{ status: string; data: string }>(
+    db, 'SELECT status, data FROM intents WHERE id = ?', [intentId]
+  );
+  if (!intentRow) {
+    return res.status(404).json({ errorCode: 'INTENT_NOT_FOUND', message: `Intent ${intentId} not found` });
+  }
+  let intentData: any = {};
+  try { intentData = JSON.parse(intentRow.data); } catch { /* ignore */ }
+  const proposal = intentData._multisigProposal;
+  if (!proposal) {
+    return res.status(400).json({ errorCode: 'NOT_MULTISIG', message: 'This intent has no multisig proposal' });
+  }
+  // Try to fetch signature status from Safe Transaction Service
+  let confirmations: any[] = [];
+  let confirmationsRequired = proposal.threshold || 2;
+  let isReadyToExecute = false;
+  try {
+    const serviceUrl = proposal.safeServiceUrl || 'https://safe-transaction-base-sepolia.safe.global';
+    const safeRes = await fetch(`${serviceUrl}/api/v1/multisig-transactions/${proposal.safeTxHash}/`);
+    if (safeRes.ok) {
+      const safeTxData = await safeRes.json() as any;
+      confirmations = safeTxData.confirmations || [];
+      confirmationsRequired = safeTxData.confirmationsRequired || confirmationsRequired;
+      isReadyToExecute = confirmations.length >= confirmationsRequired;
+    }
+  } catch {
+    // Safe TX Service unreachable (e.g., Tenderly fork) — return stored data
+  }
+  return res.json({
+    intentId,
+    status: intentRow.status,
+    executionMode: 'MULTISIG',
+    safeTxHash: proposal.safeTxHash,
+    threshold: confirmationsRequired,
+    confirmations: confirmations.length,
+    confirmationsList: confirmations.map((c: any) => ({ owner: c.owner, submittedAt: c.submittedDate })),
+    isReadyToExecute,
+    signingUrl: proposal.signingUrl,
+    safeAddress: proposal.safeAddress,
+  });
+});
