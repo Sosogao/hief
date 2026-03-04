@@ -47,6 +47,9 @@ intentsRouter.get('/', async (req: Request, res: Response) => {
         intentType: parsed.meta?.tags?.[0] ?? 'SWAP',
         userIntentText: parsed.meta?.userIntentText,
         uiHints: parsed.meta?.uiHints,
+        // Simulation info (pre-settlement dry-run)
+        simulation: parsed._simulation ?? null,
+        simulatedAt: parsed._simulatedAt ?? null,
         // Settlement info
         settlementTxHash: parsed._settlementTxHash ?? null,
         settlementStatus: parsed._settlementStatus ?? null,
@@ -131,6 +134,9 @@ intentsRouter.get('/:intentId', async (req: Request, res: Response) => {
         intent: intentData,
         solutions: parsedSolutions,
         policyResult: parsedPolicy,
+        // Simulation info (pre-settlement dry-run)
+        simulation: intentData._simulation ?? null,
+        simulatedAt: intentData._simulatedAt ?? null,
         // Settlement info (populated after on-chain execution)
         settlementTxHash: intentData._settlementTxHash ?? null,
         settlementStatus: intentData._settlementStatus ?? null,

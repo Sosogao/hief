@@ -18,9 +18,20 @@
     .tier-ELITE    { background:#2d1a3a; color:#c084fc; }
     .status-BROADCAST { color:#60a5fa; }
     .status-SELECTED  { color:#a78bfa; }
+    .status-SIMULATED { color:#f59e0b; }
     .status-EXECUTED  { color:#4ade80; }
     .status-FAILED    { color:#f87171; }
     .status-CANCELLED { color:#6b7280; }
+    .sim-card { background:rgba(245,158,11,0.07); border:1px solid rgba(245,158,11,0.3); border-radius:12px; padding:14px 16px; margin:8px 0; }
+    .sim-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; border-bottom:1px solid rgba(255,255,255,0.05); font-size:12px; }
+    .sim-row:last-child { border-bottom:none; }
+    .sim-label { color:#94a3b8; }
+    .sim-value { color:#f1f5f9; font-weight:600; font-family:monospace; }
+    .sim-value.green { color:#4ade80; }
+    .sim-value.red { color:#f87171; }
+    .btn-execute { background:linear-gradient(135deg,#10b981,#059669); color:#fff; border:none; border-radius:8px; padding:10px 20px; font-size:13px; font-weight:700; cursor:pointer; width:100%; margin-top:10px; letter-spacing:0.02em; }
+    .btn-execute:hover { opacity:0.9; }
+    .btn-execute:disabled { opacity:0.5; cursor:not-allowed; }
     .score-ring { width:160px; height:160px; border-radius:50%; display:flex; align-items:center; justify-content:center; position:relative; }
     .score-ring canvas { position:absolute; top:0; left:0; }
     .score-ring .inner { z-index:1; text-align:center; }
@@ -587,6 +598,9 @@ async function sendChatMessage() {
   setChatLoading(false);
 }
 
+// Global state for pending simulation
+var chatPendingIntentId = null;
+
 async function confirmChatIntent() {
   if (!chatPendingIntent || !chatSessionId) return;
   document.getElementById('chatIntentPreview').classList.add('hidden');
@@ -615,9 +629,11 @@ async function confirmChatIntent() {
         var busJson = await busRes.json();
         if (busRes.ok) {
           var intentId = busJson.intentId || json.intent.intentId;
+          chatPendingIntentId = intentId;
           appendChatMessage('system', '✅ Intent submitted! ID: '+intentId.slice(0,20)+'...');
-          appendChatMessage('system', 'Running solver auction...');
-          // Trigger solver network auction (includes settlement)
+          appendChatMessage('system', '🔍 Running solver auction & pre-settlement simulation...');
+
+          // Trigger solver network auction (now returns simulation, not settlement)
           setTimeout(async function() {
             try {
               var solverRes = await fetch(SOLVER_API+'/v1/solver-network/trigger', {
@@ -632,22 +648,22 @@ async function confirmChatIntent() {
                 if (w) {
                   appendChatMessage('system', '🏆 Auction complete! Winner: '+w.solverName+' | Net: $'+w.netOutUSD.toFixed(4)+' | Route: '+w.route);
                 }
-                // Show settlement result
-                if (d.settlementTxHash && d.settlementStatus === 'success') {
-                  var shortTx = d.settlementTxHash.slice(0,10)+'...'+d.settlementTxHash.slice(-8);
-                  var tenderlyUrl = 'https://dashboard.tenderly.co/tx/'+d.settlementTxHash;
-                  appendChatMessage('system', '⛓️ Settlement executing on Tenderly fork (Block '+d.settlementBlock+')...');
-                  appendChatMessage('system', '✅ EXECUTED on-chain! TX: <a href="'+tenderlyUrl+'" target="_blank" class="text-green-400 hover:underline font-mono text-xs">'+shortTx+'</a>');
-                } else if (d.settlementStatus === 'failed') {
-                  appendChatMessage('system', '⚠️ On-chain settlement failed. Intent marked as FAILED.');
+                // Show simulation result card with confirm button
+                if (d.simulation) {
+                  showSimulationCard(intentId, d.simulation, w);
+                } else {
+                  // Fallback: no simulation available, show direct execute
+                  appendChatMessage('system', '⚠️ Simulation unavailable. Use the Execute button to proceed.');
+                  showSimulationCard(intentId, null, w);
                 }
-                // Refresh intents list
                 setTimeout(loadStats, 1000);
               }
-            } catch(e) { console.error('Solver trigger error:', e); }
+            } catch(e) {
+              console.error('Solver trigger error:', e);
+              appendChatMessage('system', '⚠️ Solver error: '+e.message);
+            }
           }, 1500);
           chatPendingIntent = null;
-          // Refresh stats
           setTimeout(loadStats, 2000);
         } else {
           appendChatMessage('system', '⚠️ Submission failed: '+(busJson.message||JSON.stringify(busJson)));
@@ -658,6 +674,91 @@ async function confirmChatIntent() {
     }
   } catch(e) { appendChatMessage('agent', 'Error confirming intent.'); }
   setChatLoading(false);
+}
+
+function showSimulationCard(intentId, sim, winner) {
+  var container = document.getElementById('chatMessages');
+  var cardDiv = document.createElement('div');
+  cardDiv.id = 'simCard-'+intentId;
+  cardDiv.className = 'flex gap-3';
+
+  var avatar = document.createElement('div');
+  avatar.className = 'w-7 h-7 rounded-full bg-amber-700 flex items-center justify-center text-xs font-bold flex-shrink-0';
+  avatar.textContent = '🔬';
+
+  var bubble = document.createElement('div');
+  bubble.className = 'flex-1 max-w-lg';
+
+  var simHtml = '<div class="sim-card">';
+  simHtml += '<div style="font-size:13px;font-weight:700;color:#f59e0b;margin-bottom:10px;">🔬 Pre-Settlement Simulation</div>';
+
+  if (sim && sim.success) {
+    simHtml += '<div class="sim-row"><span class="sim-label">Status</span><span class="sim-value green">✅ Success (Simulated)</span></div>';
+    simHtml += '<div class="sim-row"><span class="sim-label">Expected Output</span><span class="sim-value green">+'+sim.expectedOutputAmount+' '+sim.expectedOutputToken+' (~$'+sim.expectedOutputUSD.toFixed(2)+')</span></div>';
+    if (sim.balanceChanges) {
+      sim.balanceChanges.forEach(function(bc) {
+        var isNeg = bc.delta.startsWith('-');
+        simHtml += '<div class="sim-row"><span class="sim-label">Balance Change ('+bc.symbol+')</span><span class="sim-value '+(isNeg?'red':'green')+'">'+(isNeg?'':'+')+''+bc.delta+' (~$'+Math.abs(bc.deltaUSD).toFixed(2)+')</span></div>';
+      });
+    }
+    simHtml += '<div class="sim-row"><span class="sim-label">Gas Used</span><span class="sim-value">'+sim.gasUsed.toLocaleString()+' gas (~$'+sim.gasEstimateUSD.toFixed(4)+')</span></div>';
+    simHtml += '<div class="sim-row"><span class="sim-label">Price Impact</span><span class="sim-value">'+(sim.priceImpactBps/100).toFixed(2)+'%</span></div>';
+    simHtml += '<div class="sim-row"><span class="sim-label">Simulated Block</span><span class="sim-value">#'+sim.simulatedBlock+'</span></div>';
+  } else if (sim && !sim.success) {
+    simHtml += '<div class="sim-row"><span class="sim-label">Status</span><span class="sim-value red">❌ Simulation Failed</span></div>';
+    simHtml += '<div class="sim-row"><span class="sim-label">Error</span><span class="sim-value red">'+(sim.error||'Unknown error')+'</span></div>';
+  } else {
+    simHtml += '<div class="sim-row"><span class="sim-label">Status</span><span class="sim-value" style="color:#94a3b8">Simulation data unavailable</span></div>';
+  }
+
+  simHtml += '<div style="margin-top:12px;font-size:11px;color:#94a3b8;">This is a dry-run simulation. No transaction has been broadcast yet.</div>';
+  simHtml += '<button class="btn-execute" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\')">';
+  simHtml += '⚡ Confirm & Execute On-Chain';
+  simHtml += '</button>';
+  simHtml += '</div>';
+
+  bubble.innerHTML = simHtml;
+  cardDiv.appendChild(avatar);
+  cardDiv.appendChild(bubble);
+  container.appendChild(cardDiv);
+  container.scrollTop = container.scrollHeight;
+}
+
+async function executeSettlement(intentId) {
+  var btn = document.getElementById('btnExecute-'+intentId);
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Broadcasting transaction...'; }
+  appendChatMessage('system', '⛓️ Broadcasting real transaction to Tenderly fork...');
+
+  try {
+    var execRes = await fetch(SOLVER_API+'/v1/solver-network/execute/'+intentId, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({})
+    });
+    var execJson = await execRes.json();
+    if (execRes.ok && execJson.success) {
+      var txHash = execJson.data.txHash;
+      var blockNum = execJson.data.blockNumber;
+      var shortTx = txHash.slice(0,10)+'...'+txHash.slice(-8);
+      var tenderlyUrl = 'https://dashboard.tenderly.co/tx/'+txHash;
+      if (btn) { btn.textContent = '✅ Executed!'; btn.style.background = '#1a3a2a'; }
+      appendChatMessage('system', '✅ EXECUTED on-chain! Block #'+blockNum);
+      // Use innerHTML for the link message
+      var container = document.getElementById('chatMessages');
+      var linkDiv = document.createElement('div');
+      linkDiv.className = 'flex gap-3';
+      linkDiv.innerHTML = '<div class="w-7 h-7 rounded-full bg-green-900 flex items-center justify-center text-xs font-bold flex-shrink-0">⚙</div><div class="flex-1 max-w-lg"><div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-xs font-mono text-green-400 bg-green-900/20">TX: <a href="'+tenderlyUrl+'" target="_blank" class="text-green-300 hover:underline">'+shortTx+'</a></div></div>';
+      container.appendChild(linkDiv);
+      container.scrollTop = container.scrollHeight;
+      setTimeout(loadStats, 1500);
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ Retry Execute'; }
+      appendChatMessage('system', '⚠️ Execution failed: '+(execJson.error||JSON.stringify(execJson)));
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ Retry Execute'; }
+    appendChatMessage('system', '⚠️ Execution error: '+e.message);
+  }
 }
 
 function cancelChatIntent() {

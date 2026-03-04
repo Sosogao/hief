@@ -170,6 +170,51 @@ intentsRouter.post('/:intentId/select', async (req: Request, res: Response) => {
   return res.json({ intentId, selectedSolutionId: solutionId, status: 'SELECTED' });
 });
 
+// POST /intents/:intentId/simulate - Store pre-settlement simulation result and mark as SIMULATED
+intentsRouter.post('/:intentId/simulate', (req: Request, res: Response) => {
+  const { intentId } = req.params;
+  const { simulation } = req.body;
+
+  if (!simulation) {
+    return res.status(400).json({ errorCode: 'MISSING_SIMULATION', message: 'simulation object is required' });
+  }
+
+  const db = getDb();
+  const intentRow = dbGet<{ status: string; data: string }>(
+    db, 'SELECT status, data FROM intents WHERE id = ?', [intentId]
+  );
+  if (!intentRow) {
+    return res.status(404).json({ errorCode: 'INTENT_NOT_FOUND', message: `Intent ${intentId} not found` });
+  }
+  if (isTerminalIntentStatus(intentRow.status as any)) {
+    return res.status(400).json({
+      errorCode: 'INTENT_ALREADY_TERMINAL',
+      message: `Intent is already in terminal state: ${intentRow.status}`,
+    });
+  }
+
+  // Store simulation result in intent data JSON
+  let intentData: any = {};
+  try { intentData = JSON.parse(intentRow.data); } catch { /* ignore */ }
+  intentData._simulation = simulation;
+  intentData._simulatedAt = Math.floor(Date.now() / 1000);
+
+  // Update status to SIMULATED (stays in SELECTED state, just enriched with simulation data)
+  dbRun(db,
+    `UPDATE intents SET data = ?, updated_at = strftime('%s','now') WHERE id = ?`,
+    [JSON.stringify(intentData), intentId]
+  );
+
+  console.log(`[BUS] 🔬 Intent ${intentId.slice(0, 16)}... simulation stored | gasUsed: ${simulation.gasUsed} | expectedOut: ${simulation.expectedOutputAmount} ${simulation.expectedOutputToken}`);
+
+  return res.json({
+    intentId,
+    status: intentRow.status,
+    simulation,
+    simulatedAt: intentData._simulatedAt,
+  });
+});
+
 // POST /intents/:intentId/settle - Record on-chain settlement result (txHash) and mark as EXECUTED
 intentsRouter.post('/:intentId/settle', (req: Request, res: Response) => {
   const { intentId } = req.params;
