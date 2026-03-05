@@ -321,7 +321,7 @@ async function simulateSettlement(
     method: 'tenderly_simulateTransaction',
     params: [
       {
-        from: '0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a',
+        from: new ethers.Wallet(SETTLEMENT_PRIVATE_KEY).address,
         to: WETH_ADDRESS,
         data: WETH_DEPOSIT_SELECTOR,
         value: valueHex,
