@@ -4,6 +4,43 @@ All notable changes to the HIEF platform are documented here.
 
 ---
 
+## [1.4.0] — 2025-03 — ERC-4337 Smart Account Support
+
+### Added
+
+**`packages/solver-network/src/erc4337.ts`** (new file)
+
+A new module encapsulating all ERC-4337 Account Abstraction logic. `detectERC4337Account()` is integrated into `detectAccountMode()` in `safeMultisig.ts` — after ruling out Safe contracts, it calls `entryPoint()` on the target address. If the returned address matches EntryPoint v0.6 (`0x5FF137D4...`) or v0.7 (`0x00000007...`), the account is classified as `ERC4337` mode. The account type is further identified from bytecode patterns (SimpleAccount, KernelAccount, BiconomyAccount).
+
+`buildUserOperation()` constructs a complete EIP-4337 `UserOperation` struct: it encodes the settlement calldata using the `execute(address, uint256, bytes)` function selector, fetches the current nonce from `EntryPoint.getNonce()`, estimates gas limits, and packs the UserOp. `signUserOperation()` computes the UserOp hash using the EIP-4337 domain separator (keccak256 of packed `userOpHash + entryPoint + chainId`) and signs it with the AI's private key using `signMessage()`. `submitUserOperation()` calls `EntryPoint.handleOps()` directly on-chain (bypassing the bundler for testnet simplicity) and returns the transaction hash and UserOp hash.
+
+**`packages/solver-network/src/safeMultisig.ts`** (modified)
+
+`detectAccountMode()` now has a third branch (after EOA and Safe detection): it tries `entryPoint()` on the contract. If successful and pointing to a known EntryPoint, it returns `mode: 'ERC4337'` with `isERC4337: true`, `entryPoint`, and `accountType` fields.
+
+**`packages/solver-network/src/server.ts`** (modified)
+
+The `POST /execute/:intentId` endpoint now has three branches: `DIRECT`, `MULTISIG`, and `ERC4337`. In ERC-4337 mode, it calls `executeERC4337()` from `erc4337.ts`, which builds the UserOperation, signs it, and submits it via `handleOps()`. The response includes `executionMode: 'ERC4337'`, `userOpHash`, `txHash`, `blockNumber`, `entryPoint`, and `accountType`.
+
+**`apps/explorer/index.html`** (modified)
+
+Three new CSS classes added: `.mode-badge-erc4337`, `.erc4337-card`, and `.btn-erc4337` (sky-blue color scheme). `showSimulationCard()` now handles `isERC4337` flag: displays the ERC-4337 card with account type and EntryPoint address, and shows a **"🤖 Execute via ERC-4337 UserOp"** button. `executeSettlement()` accepts a third parameter `isERC4337` and handles the ERC-4337 response by displaying both the UserOp hash and the transaction hash.
+
+**`packages/solver-network/test_erc4337_e2e.js`** (new file)
+
+A 7-step end-to-end test that: (1) verifies the deployed SimpleAccount at `0xA1681bA5882214D66ca1eE3127E031FCCbadb3Df`; (2) funds its EntryPoint deposit; (3) calls `detectAccountMode()` and asserts `ERC4337`; (4) submits a valid intent; (5) triggers the auction and asserts `ERC4337` execution mode; (6) calls `/execute` and asserts a valid `userOpHash` and `txHash`; (7) checks intent status.
+
+### Test Results
+
+**Local (Tenderly fork, block 38454789):**
+- SimpleAccount: `0xA1681bA5882214D66ca1eE3127E031FCCbadb3Df`
+- EntryPoint: `0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789` (v0.6)
+- UserOpHash: `0xc4072ccd09ab29578410c7a87e9196a7e28755964219e8ed316fe4351b700f4c`
+- TxHash: `0x2590c9d8f944c9f4c7a268adef43cf1a2c7e6d578e486788e744982c434cea9c`
+- All 7 test steps passed ✅
+
+---
+
 ## [1.3.0] — 2025-01 — Real MetaMask EIP-712 Multisig Signing
 
 ### Changed

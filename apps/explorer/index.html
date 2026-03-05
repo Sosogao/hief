@@ -40,6 +40,11 @@
     .multisig-card { background:rgba(124,58,237,0.07); border:1px solid rgba(124,58,237,0.3); border-radius:12px; padding:14px 16px; margin:8px 0; }
     .mode-badge-direct   { display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:9999px;font-size:10px;font-weight:700;background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);color:#4ade80; }
     .mode-badge-multisig { display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:9999px;font-size:10px;font-weight:700;background:rgba(124,58,237,0.15);border:1px solid rgba(124,58,237,0.3);color:#a78bfa; }
+    .mode-badge-erc4337  { display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:9999px;font-size:10px;font-weight:700;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.3);color:#38bdf8; }
+    .erc4337-card { background:rgba(56,189,248,0.07); border:1px solid rgba(56,189,248,0.3); border-radius:12px; padding:14px 16px; margin:8px 0; }
+    .btn-erc4337 { background:linear-gradient(135deg,#0284c7,#0369a1); color:#fff; border:none; border-radius:8px; padding:10px 20px; font-size:13px; font-weight:700; cursor:pointer; width:100%; margin-top:10px; letter-spacing:0.02em; }
+    .btn-erc4337:hover { opacity:0.9; }
+    .btn-erc4337:disabled { opacity:0.5; cursor:not-allowed; }
     .sig-progress { display:flex;gap:6px;margin:8px 0; }
     .sig-dot { width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700; }
     .sig-dot.signed { background:rgba(124,58,237,0.4);border:2px solid #7c3aed;color:#c084fc; }
@@ -665,6 +670,8 @@ async function confirmChatIntent() {
                 var execMode = d.executionMode || 'DIRECT';
                 if (execMode === 'MULTISIG') {
                   appendChatMessage('system', '🔐 Multisig account detected (threshold: ' + (accountInfo && accountInfo.threshold) + '). Simulation complete.');
+                } else if (execMode === 'ERC4337') {
+                  appendChatMessage('system', '🤖 ERC-4337 Smart Account detected (type: ' + (accountInfo && accountInfo.accountType || 'SmartAccount') + '). Simulation complete.');
                 } else {
                   appendChatMessage('system', '⚡ Direct execution mode detected.');
                 }
@@ -703,13 +710,17 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
   cardDiv.className = 'flex gap-3';
 
   var isMultisig = accountInfo && accountInfo.mode === 'MULTISIG' && accountInfo.isSafe;
+  var isERC4337 = accountInfo && accountInfo.mode === 'ERC4337' && accountInfo.isERC4337;
   var threshold = (accountInfo && accountInfo.threshold) || 1;
   var owners = (accountInfo && accountInfo.owners) || [];
+  var accountType = (accountInfo && accountInfo.accountType) || 'SmartAccount';
+  var entryPoint = (accountInfo && accountInfo.entryPoint) || '';
 
   var avatar = document.createElement('div');
   avatar.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0';
-  avatar.style.background = isMultisig ? '#4c1d95' : '#78350f';
-  avatar.textContent = isMultisig ? '🔐' : '🔬';
+  if (isMultisig) { avatar.style.background = '#4c1d95'; avatar.textContent = '🔐'; }
+  else if (isERC4337) { avatar.style.background = '#0c4a6e'; avatar.textContent = '🤖'; }
+  else { avatar.style.background = '#78350f'; avatar.textContent = '🔬'; }
 
   var bubble = document.createElement('div');
   bubble.className = 'flex-1 max-w-lg';
@@ -717,12 +728,14 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
   // Mode badge
   var modeBadge = isMultisig
     ? '<span class="mode-badge-multisig">🔐 Multisig Mode (' + threshold + '-of-' + owners.length + ')</span>'
+    : isERC4337
+    ? '<span class="mode-badge-erc4337">🤖 ERC-4337 Mode</span>'
     : '<span class="mode-badge-direct">⚡ Direct Mode</span>';
 
-  var cardClass = isMultisig ? 'multisig-card' : 'sim-card';
-  var titleColor = isMultisig ? '#a78bfa' : '#f59e0b';
-  var titleIcon = isMultisig ? '🔐' : '🔬';
-  var titleText = isMultisig ? 'Multisig Pre-Settlement Simulation' : 'Pre-Settlement Simulation';
+  var cardClass = isMultisig ? 'multisig-card' : isERC4337 ? 'erc4337-card' : 'sim-card';
+  var titleColor = isMultisig ? '#a78bfa' : isERC4337 ? '#38bdf8' : '#f59e0b';
+  var titleIcon = isMultisig ? '🔐' : isERC4337 ? '🤖' : '🔬';
+  var titleText = isMultisig ? 'Multisig Pre-Settlement Simulation' : isERC4337 ? 'ERC-4337 Pre-Settlement Simulation' : 'Pre-Settlement Simulation';
 
   var simHtml = '<div class="' + cardClass + '">';
   simHtml += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
@@ -751,7 +764,7 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
 
   if (isMultisig) {
     // Multisig-specific info
-    simHtml += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(124,58,237,0.2);">';
+    simHtml += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(124,58,237,0.2);">'
     simHtml += '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">Required Signatures: <strong style="color:#a78bfa;">' + threshold + ' of ' + owners.length + ' owners</strong></div>';
     if (owners.length > 0) {
       simHtml += '<div style="font-size:10px;color:#64748b;margin-bottom:4px;">Safe Owners:</div>';
@@ -764,6 +777,18 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
     simHtml += '<div style="margin-top:10px;font-size:11px;color:#94a3b8;">AI will propose the Safe TX. Co-signers must approve before execution.</div>';
     simHtml += '<button class="btn-multisig" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', true)">';
     simHtml += '🔐 Propose Multisig Transaction';
+    simHtml += '</button>';
+  } else if (isERC4337) {
+    // ERC-4337-specific info
+    simHtml += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(56,189,248,0.2);">'
+    simHtml += '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">Account Type: <strong style="color:#38bdf8;">' + accountType + '</strong></div>';
+    if (entryPoint) {
+      simHtml += '<div style="font-size:10px;font-family:monospace;color:#64748b;margin-bottom:4px;">EntryPoint: ' + entryPoint.slice(0,10) + '...' + entryPoint.slice(-6) + '</div>';
+    }
+    simHtml += '</div>';
+    simHtml += '<div style="margin-top:10px;font-size:11px;color:#94a3b8;">UserOperation will be built, signed, and submitted via EntryPoint. No separate approval needed.</div>';
+    simHtml += '<button class="btn-erc4337" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false, true)">';
+    simHtml += '🤖 Execute via ERC-4337 UserOp';
     simHtml += '</button>';
   } else {
     simHtml += '<div style="margin-top:12px;font-size:11px;color:#94a3b8;">This is a dry-run simulation. No transaction has been broadcast yet.</div>';
@@ -780,12 +805,15 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
   container.scrollTop = container.scrollHeight;
 }
 
-// executeSettlement: handles both DIRECT mode (broadcast) and MULTISIG mode (propose Safe TX)
-async function executeSettlement(intentId, isMultisig) {
+// executeSettlement: handles DIRECT, MULTISIG, and ERC-4337 modes
+async function executeSettlement(intentId, isMultisig, isERC4337) {
   var btn = document.getElementById('btnExecute-'+intentId);
   if (isMultisig) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Proposing Safe transaction...'; }
     appendChatMessage('system', '🔐 Proposing Safe multisig transaction...');
+  } else if (isERC4337) {
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Building UserOperation...'; }
+    appendChatMessage('system', '🤖 Building ERC-4337 UserOperation and submitting via EntryPoint...');
   } else {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Broadcasting transaction...'; }
     appendChatMessage('system', '⛓️ Broadcasting real transaction to Tenderly fork...');
@@ -805,6 +833,23 @@ async function executeSettlement(intentId, isMultisig) {
         if (btn) { btn.textContent = '🔐 Proposed!'; btn.style.background = '#2d1a4a'; }
         appendChatMessage('system', '🔐 Safe TX proposed! Waiting for co-signatures (' + d.threshold + ' required)...');
         showMultisigPendingCard(intentId, d);
+      } else if (d.executionMode === 'ERC4337') {
+        // ─── ERC-4337: Show UserOp hash and tx hash ────────────────────────────────────────────────────
+        var userOpHash = d.userOpHash || '';
+        var txHash = d.txHash;
+        var blockNum = d.blockNumber;
+        var shortUserOp = userOpHash ? userOpHash.slice(0,10)+'...'+userOpHash.slice(-8) : 'N/A';
+        var shortTx = txHash.slice(0,10)+'...'+txHash.slice(-8);
+        var tenderlyUrl = 'https://dashboard.tenderly.co/tx/'+txHash;
+        if (btn) { btn.textContent = '✅ UserOp Executed!'; btn.style.background = '#0c2a3a'; }
+        appendChatMessage('system', '🤖 ERC-4337 UserOp EXECUTED! UserOpHash: ' + shortUserOp + ' | Block #'+blockNum);
+        var container = document.getElementById('chatMessages');
+        var linkDiv = document.createElement('div');
+        linkDiv.className = 'flex gap-3';
+        linkDiv.innerHTML = '<div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0" style="background:#0c4a6e;">🤖</div><div class="flex-1 max-w-lg"><div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-xs font-mono bg-sky-900/20"><div style="color:#38bdf8;margin-bottom:4px;font-weight:700;">ERC-4337 UserOp Executed</div><div style="color:#94a3b8;margin-bottom:2px;">UserOpHash: <span style="color:#7dd3fc;">' + shortUserOp + '</span></div><div style="color:#94a3b8;">TX: <a href="'+tenderlyUrl+'" target="_blank" style="color:#38bdf8;">'+shortTx+'</a></div></div></div>';
+        container.appendChild(linkDiv);
+        container.scrollTop = container.scrollHeight;
+        setTimeout(loadStats, 1500);
       } else {
         // ─── DIRECT: Show tx hash ────────────────────────────────────────────────────────────────────────────
         var txHash = d.txHash;
@@ -822,11 +867,13 @@ async function executeSettlement(intentId, isMultisig) {
         setTimeout(loadStats, 1500);
       }
     } else {
-      if (btn) { btn.disabled = false; btn.textContent = isMultisig ? '🔐 Retry Propose' : '⚡ Retry Execute'; }
-      appendChatMessage('system', '⚠️ '+(isMultisig?'Proposal':'Execution')+' failed: '+(execJson.error||JSON.stringify(execJson)));
+      var retryLabel = isMultisig ? '🔐 Retry Propose' : isERC4337 ? '🤖 Retry UserOp' : '⚡ Retry Execute';
+      if (btn) { btn.disabled = false; btn.textContent = retryLabel; }
+      appendChatMessage('system', '⚠️ '+(isMultisig?'Proposal':isERC4337?'UserOp':'Execution')+' failed: '+(execJson.error||JSON.stringify(execJson)));
     }
   } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = isMultisig ? '🔐 Retry Propose' : '⚡ Retry Execute'; }
+    var retryLabel2 = isMultisig ? '🔐 Retry Propose' : isERC4337 ? '🤖 Retry UserOp' : '⚡ Retry Execute';
+    if (btn) { btn.disabled = false; btn.textContent = retryLabel2; }
     appendChatMessage('system', '⚠️ Error: '+e.message);
   }
 }

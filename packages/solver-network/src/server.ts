@@ -25,6 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import initSqlJs from 'sql.js';
 import { detectAccountMode, proposeSafeMultisig, executeWithSignatures, buildSafeTxTypedData, type AccountInfo, type ExecutionMode, type SafeTxData, type SafeProposalResult } from './safeMultisig';
+import { executeERC4337, getOrCreateSimpleAccount, ENTRY_POINT_V06, type ERC4337ExecutionResult } from './erc4337';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);
@@ -475,11 +476,13 @@ interface AuctionResult {
   submittedAt: number;
   // Simulation result (populated after auction, before user confirmation)
   simulation?: SimulationResult;
-  // Execution mode: DIRECT (single-owner) or MULTISIG (Safe threshold ≥ 2)
-  executionMode?: 'DIRECT' | 'MULTISIG';
+  // Execution mode: DIRECT (single-owner), MULTISIG (Safe threshold ≥ 2), or ERC4337
+  executionMode?: 'DIRECT' | 'MULTISIG' | 'ERC4337';
   accountInfo?: AccountInfo;
   // Multisig proposal (populated when executionMode === 'MULTISIG')
   multisigProposal?: SafeProposalResult & { threshold: number };
+  // ERC-4337 result (populated when executionMode === 'ERC4337')
+  erc4337Result?: ERC4337ExecutionResult;
   // Settlement result (populated after user confirms execution)
   settlementTxHash?: string;
   settlementBlock?: number;
@@ -499,6 +502,8 @@ const pendingSimulations = new Map<string, {
   aiSignerAddress?: string;    // AI proposer's address
   safeTxHash?: string;         // EIP-712 hash
   safeTxTypedData?: any;       // Full EIP-712 typed data for frontend MetaMask call
+  // ERC-4337 mode: stored after /execute is called
+  erc4337Result?: ERC4337ExecutionResult;
 }>();
 
 async function runAuction(intentId: string, intentHash: string, intent: any): Promise<AuctionResult> {
@@ -615,15 +620,15 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
         });
 
         // ─── Simulation Layer ─────────────────────────────────────────────────────
-        // Step 1: Detect account execution mode (DIRECT vs MULTISIG)
+        // Step 1: Detect account execution mode (DIRECT vs MULTISIG vs ERC4337)
         const smartAccount = intent.sender || intent.smartAccount || '';
         let accountInfo: AccountInfo | undefined;
-        let executionMode: 'DIRECT' | 'MULTISIG' = 'DIRECT';
+        let executionMode: 'DIRECT' | 'MULTISIG' | 'ERC4337' = 'DIRECT';
         if (smartAccount && smartAccount.startsWith('0x')) {
           try {
             accountInfo = await detectAccountMode(smartAccount, TENDERLY_RPC_URL, SETTLEMENT_CHAIN_ID);
             executionMode = accountInfo.mode;
-            console.log(`[SolverNetwork] Account mode: ${executionMode} | threshold: ${accountInfo.threshold} | isSafe: ${accountInfo.isSafe}`);
+            console.log(`[SolverNetwork] Account mode: ${executionMode} | threshold: ${accountInfo.threshold} | isSafe: ${accountInfo.isSafe} | isERC4337: ${accountInfo.isERC4337}`);
           } catch (modeErr: any) {
             console.warn(`[SolverNetwork] Account mode detection failed, defaulting to DIRECT: ${modeErr.message}`);
           }
@@ -681,6 +686,29 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
               intentId, intentHash, quotes, winner, winnerReason, auctionDurationMs,
               submittedSolutionId, submittedAt: Math.floor(Date.now() / 1000),
               simulation: simResult, executionMode: 'MULTISIG', accountInfo, multisigProposal,
+            };
+          } else if (executionMode === 'ERC4337' && accountInfo?.isERC4337) {
+            // ─── ERC-4337 MODE ────────────────────────────────────────────────────
+            // Store pending simulation — ERC-4337 execution happens at /execute
+            pendingSimulations.set(intentId, { intent, winner, simulation: simResult, accountInfo });
+            await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                simulation: simResult,
+                executionMode: 'ERC4337',
+                accountInfo: {
+                  address: accountInfo.address,
+                  entryPoint: accountInfo.entryPoint,
+                  accountType: accountInfo.accountType,
+                },
+              }),
+            }).catch(() => {});
+            console.log(`[ERC4337] ✅ Simulation complete | account=${accountInfo.address.slice(0, 10)}... | type=${accountInfo.accountType} | awaiting user confirmation`);
+            return {
+              intentId, intentHash, quotes, winner, winnerReason, auctionDurationMs,
+              submittedSolutionId, submittedAt: Math.floor(Date.now() / 1000),
+              simulation: simResult, executionMode: 'ERC4337', accountInfo,
             };
           } else {
             // ─── DIRECT MODE ──────────────────────────────────────────────────────
@@ -914,8 +942,84 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
   }
   const { intent, winner, accountInfo } = pending;
   const isMultisig = accountInfo?.mode === 'MULTISIG' && accountInfo?.isSafe;
+  const isERC4337 = accountInfo?.mode === 'ERC4337' && accountInfo?.isERC4337;
 
-  if (isMultisig) {
+  if (isERC4337) {
+    // ─── ERC-4337 MODE: Build UserOp, sign, submit via EntryPoint ──────────────────────────────
+    try {
+      console.log(`[ERC4337] User confirmed ERC-4337 execution for ${intentId.slice(0, 16)}... Building UserOp...`);
+
+      // Build the settlement calldata (WETH wrap as representative tx)
+      const wethInterface = new ethers.Interface(['function deposit() payable']);
+      const depositData = wethInterface.encodeFunctionData('deposit', []);
+      const txTo = WETH_ADDRESS;
+      const txValue = ethers.parseEther('0.001').toString();
+      const txData = depositData;
+
+      const entryPointAddress = accountInfo.entryPoint || ENTRY_POINT_V06;
+
+      // Execute via ERC-4337 (build UserOp → simulate → sign → submit)
+      const result = await executeERC4337({
+        accountAddress: accountInfo.address,
+        to: txTo,
+        value: txValue,
+        data: txData,
+        entryPointAddress,
+        rpcUrl: TENDERLY_RPC_URL,
+        ownerPrivateKey: SETTLEMENT_PRIVATE_KEY,
+        chainId: SETTLEMENT_CHAIN_ID,
+        accountType: accountInfo.accountType || 'SmartAccount',
+      });
+
+      // Store result
+      const updatedPending = pendingSimulations.get(intentId);
+      if (updatedPending) updatedPending.erc4337Result = result;
+
+      // Notify Intent Bus: EXECUTED
+      await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash: result.txHash, txStatus: 'success' }),
+      }).catch(() => {});
+
+      pendingSimulations.delete(intentId);
+
+      // Update auction history
+      const historyEntry = auctionHistory.find(a => a.intentId === intentId);
+      if (historyEntry) {
+        historyEntry.settlementTxHash = result.txHash;
+        historyEntry.settlementBlock = result.blockNumber;
+        historyEntry.settlementStatus = 'success';
+        historyEntry.executionMode = 'ERC4337';
+        historyEntry.erc4337Result = result;
+      }
+
+      console.log(`[ERC4337] ✅ EXECUTED | userOpHash: ${result.userOpHash.slice(0, 16)}... | txHash: ${result.txHash.slice(0, 16)}... | block: ${result.blockNumber}`);
+      res.json({
+        success: true,
+        data: {
+          intentId,
+          executionMode: 'ERC4337',
+          status: 'EXECUTED',
+          userOpHash: result.userOpHash,
+          txHash: result.txHash,
+          blockNumber: result.blockNumber,
+          entryPoint: entryPointAddress,
+          accountType: accountInfo.accountType,
+          userOpSimulation: result.simulation,
+        },
+      });
+    } catch (err: any) {
+      console.error(`[ERC4337] ❌ Execution failed: ${err.message}`);
+      pendingSimulations.delete(intentId);
+      await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash: '0x' + '0'.repeat(64), txStatus: 'failed' }),
+      }).catch(() => {});
+      res.status(500).json({ success: false, error: err.message });
+    }
+  } else if (isMultisig) {
     // ─── MULTISIG MODE: Propose Safe TX, wait for co-signatures ──────────────────────────────
     try {
       console.log(`[SafeMultisig] User confirmed multisig proposal for ${intentId.slice(0, 16)}... Proposing Safe TX...`);

@@ -18,7 +18,7 @@ import { ethers } from 'ethers';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ExecutionMode = 'DIRECT' | 'MULTISIG';
+export type ExecutionMode = 'DIRECT' | 'MULTISIG' | 'ERC4337';
 
 export interface AccountInfo {
   address: string;
@@ -26,6 +26,9 @@ export interface AccountInfo {
   threshold: number;       // 0 = EOA, 1 = single-owner Safe, ≥2 = multisig
   owners: string[];        // Safe owners (empty for EOA)
   isSafe: boolean;
+  isERC4337: boolean;      // true if address is an ERC-4337 smart account
+  entryPoint?: string;     // EntryPoint contract address (ERC-4337 only)
+  accountType?: string;    // e.g. 'SimpleAccount', 'KernelAccount', 'BiconomyAccount'
 }
 
 export interface SafeProposalResult {
@@ -62,8 +65,17 @@ const SAFE_UI_URL = 'https://app.safe.global';
 // ─── Account Mode Detection ───────────────────────────────────────────────────
 
 /**
- * Detect whether an address is a Safe multisig (threshold ≥ 2) or a direct account.
- * Uses eth_getCode to check if the address is a contract, then calls getThreshold().
+ * Detect whether an address is:
+ *   - Plain EOA                    → DIRECT mode
+ *   - Safe with threshold ≥ 2     → MULTISIG mode
+ *   - Safe with threshold = 1     → DIRECT mode (single-owner Safe)
+ *   - ERC-4337 smart account      → ERC4337 mode
+ *
+ * Detection order:
+ *   1. No code → EOA → DIRECT
+ *   2. Has Safe interface (getThreshold) → Safe → DIRECT or MULTISIG
+ *   3. Has ERC-4337 interface (validateUserOp) → ERC4337
+ *   4. Unknown contract → DIRECT (fallback)
  */
 export async function detectAccountMode(
   address: string,
@@ -72,45 +84,77 @@ export async function detectAccountMode(
 ): Promise<AccountInfo> {
   const provider = new ethers.JsonRpcProvider(rpcUrl);
 
+  // ERC-4337 EntryPoint addresses (v0.6 and v0.7)
+  const ENTRY_POINT_V06 = '0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789';
+  const ENTRY_POINT_V07 = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+
+  // Minimal ERC-4337 IAccount ABI — validateUserOp is the canonical identifier
+  const ERC4337_ABI = [
+    'function validateUserOp(tuple(address sender, uint256 nonce, bytes initCode, bytes callData, uint256 callGasLimit, uint256 verificationGasLimit, uint256 preVerificationGas, uint256 maxFeePerGas, uint256 maxPriorityFeePerGas, bytes paymasterAndData, bytes signature) userOp, bytes32 userOpHash, uint256 missingAccountFunds) external returns (uint256 validationData)',
+    'function entryPoint() external view returns (address)',
+    'function getNonce() external view returns (uint256)',
+  ];
+
   try {
-    // Check if address is a contract
+    // Step 1: Check if address is a contract
     const code = await provider.getCode(address);
     if (code === '0x' || code === '') {
       // Plain EOA
-      return { address, mode: 'DIRECT', threshold: 0, owners: [], isSafe: false };
+      console.log(`[AccountDetect] ${address.slice(0, 10)}... → EOA → DIRECT`);
+      return { address, mode: 'DIRECT', threshold: 0, owners: [], isSafe: false, isERC4337: false };
     }
 
-    // Try to call Safe methods — if it fails, it's not a Safe
+    // Step 2: Try Safe interface first
     const safeContract = new ethers.Contract(address, SAFE_ABI, provider);
-
-    let threshold: bigint;
-    let owners: string[];
     try {
-      [threshold, owners] = await Promise.all([
+      const [threshold, owners] = await Promise.all([
         safeContract.getThreshold(),
         safeContract.getOwners(),
       ]);
+      const thresholdNum = Number(threshold);
+      const mode: ExecutionMode = thresholdNum >= 2 ? 'MULTISIG' : 'DIRECT';
+      console.log(`[AccountDetect] ${address.slice(0, 10)}... → Safe | threshold=${thresholdNum} | mode=${mode}`);
+      return {
+        address, mode, threshold: thresholdNum,
+        owners: owners as string[], isSafe: true, isERC4337: false,
+      };
     } catch {
-      // Contract exists but is not a Safe (e.g., ERC-4337 smart account)
-      return { address, mode: 'DIRECT', threshold: 1, owners: [], isSafe: false };
+      // Not a Safe — continue to ERC-4337 detection
     }
 
-    const thresholdNum = Number(threshold);
-    const mode: ExecutionMode = thresholdNum >= 2 ? 'MULTISIG' : 'DIRECT';
+    // Step 3: Try ERC-4337 interface
+    const aaContract = new ethers.Contract(address, ERC4337_ABI, provider);
+    try {
+      // Try to read the entryPoint — this is a standard method on all ERC-4337 accounts
+      const ep = await aaContract.entryPoint();
+      const epLower = ep.toLowerCase();
+      const isKnownEP = epLower === ENTRY_POINT_V06.toLowerCase() || epLower === ENTRY_POINT_V07.toLowerCase();
+      const epVersion = epLower === ENTRY_POINT_V07.toLowerCase() ? 'v0.7' : 'v0.6';
 
-    console.log(`[SafeMultisig] Account ${address.slice(0, 10)}... detected: Safe | threshold=${thresholdNum} | owners=${owners.length} | mode=${mode}`);
+      // Detect account type from bytecode patterns
+      let accountType = 'SmartAccount';
+      if (code.includes('5FF137D4')) accountType = 'SimpleAccount';
+      else if (code.includes('d9cFb9A5')) accountType = 'KernelAccount';
+      else if (code.includes('1195e8ef')) accountType = 'BiconomyAccount';
 
-    return {
-      address,
-      mode,
-      threshold: thresholdNum,
-      owners: owners as string[],
-      isSafe: true,
-    };
+      console.log(`[AccountDetect] ${address.slice(0, 10)}... → ERC-4337 | entryPoint=${ep.slice(0, 10)}... (${epVersion}) | type=${accountType}`);
+      return {
+        address, mode: 'ERC4337', threshold: 1, owners: [],
+        isSafe: false, isERC4337: true,
+        entryPoint: isKnownEP ? ep : ENTRY_POINT_V06,
+        accountType,
+      };
+    } catch {
+      // Not an ERC-4337 account either — unknown contract, default to DIRECT
+    }
+
+    // Step 4: Unknown contract — treat as DIRECT
+    console.log(`[AccountDetect] ${address.slice(0, 10)}... → Unknown contract → DIRECT (fallback)`);
+    return { address, mode: 'DIRECT', threshold: 1, owners: [], isSafe: false, isERC4337: false };
+
   } catch (err: any) {
-    console.warn(`[SafeMultisig] Could not detect account mode for ${address}: ${err.message}`);
-    // Default to DIRECT on error
-    return { address, mode: 'DIRECT', threshold: 0, owners: [], isSafe: false };
+    console.warn(`[AccountDetect] Could not detect account mode for ${address}: ${err.message}`);
+    return { address, mode: 'DIRECT', threshold: 0, owners: [], isSafe: false, isERC4337: false };
   }
 }
 

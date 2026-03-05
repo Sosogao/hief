@@ -1,6 +1,6 @@
 # HIEF Platform — User Manual
 
-**Version 1.3** | AI-Powered DeFi Intent Infrastructure with Real MetaMask Multisig Signing
+**Version 1.4** | AI-Powered DeFi Intent Infrastructure with ERC-4337 Smart Account Support
 
 ---
 
@@ -8,14 +8,15 @@
 
 HIEF (Human-Intent Execution Framework) is an AI-powered DeFi infrastructure platform that translates natural language into on-chain transactions. Users describe what they want to achieve — for example, "swap 100 USDC for ETH at the best price" — and the platform handles the entire execution pipeline: intent parsing, solver auction, pre-settlement simulation, and on-chain execution.
 
-HIEF supports two distinct execution modes that are automatically selected based on the connected account type:
+HIEF supports three distinct execution modes that are automatically selected based on the connected account type:
 
 | Mode | Account Type | Description |
 |------|-------------|-------------|
 | **Direct Mode** | EOA or Safe with threshold = 1 | AI executes the transaction immediately after user confirmation |
 | **Multisig Mode** | Gnosis Safe with threshold ≥ 2 | AI proposes the transaction; co-signers must approve before execution |
+| **ERC-4337 Mode** | ERC-4337 smart account (SimpleAccount, Kernel, Biconomy, etc.) | AI builds and signs a UserOperation, submitted via the EntryPoint contract |
 
-Both modes require a **pre-settlement simulation** before any real transaction is broadcast, giving users full visibility into expected outcomes before committing.
+All modes require a **pre-settlement simulation** before any real transaction is broadcast, giving users full visibility into expected outcomes before committing.
 
 ---
 
@@ -76,6 +77,26 @@ Direct Mode is used when the connected account is a standard EOA or a Gnosis Saf
 7. The transaction is broadcast to the blockchain (Tenderly fork in the current testnet environment).
 8. The chat displays the transaction hash with a link to the Tenderly block explorer.
 9. The intent status in the Explorer updates to **EXECUTED**.
+
+### ERC-4337 Mode
+
+ERC-4337 Mode is automatically activated when the connected account is an ERC-4337 smart account (any contract that implements `entryPoint()` pointing to the standard EntryPoint contract at `0x5FF137D4...` v0.6 or `0x00000007...` v0.7). This includes SimpleAccount, Kernel, Biconomy, and other AA wallets. In this mode, the AI constructs a `UserOperation`, signs it with the account owner's key, and submits it directly to the EntryPoint via `handleOps()`. No separate user approval is required.
+
+**Step-by-step flow:**
+
+1. The user types an intent using an ERC-4337 smart account address.
+2. The AI agent parses the intent and presents a preview card.
+3. The user confirms submission. The system detects the ERC-4337 account by calling `entryPoint()` on the contract.
+4. The solver auction runs automatically.
+5. An **ERC-4337 Pre-Settlement Simulation** card appears with a **🤖 ERC-4337 Mode** badge, showing the simulation data plus the account type and EntryPoint address.
+6. The user clicks **"🤖 Execute via ERC-4337 UserOp"**.
+7. The backend builds the `UserOperation` with the swap calldata, fetches the current nonce from the EntryPoint, estimates gas, and signs the UserOp hash with the AI's key.
+8. The UserOperation is submitted to the EntryPoint via `handleOps()` on-chain.
+9. The transaction is confirmed and the intent status updates to **EXECUTED** with both the `userOpHash` and the transaction hash.
+
+**Note on EntryPoint deposit:** The smart account must have a sufficient ETH deposit in the EntryPoint contract (`EntryPoint.depositTo()`) to cover gas costs. The system checks the deposit balance and will fail gracefully if insufficient.
+
+---
 
 ### Multisig Mode
 
@@ -144,6 +165,18 @@ The following API endpoints are available through the HIEF Gateway:
 | `GET` | `/v1/solver-network/simulation/:intentId` | Get pending simulation result |
 | `POST` | `/v1/solver-network/execute/:intentId` | Confirm and execute (Direct) or propose (Multisig) |
 | `POST` | `/v1/solver-network/multisig-collect-signature/:intentId` | Receive co-signer EIP-712 signature and execute Safe TX on-chain |
+
+**ERC-4337 Execute Response** (when `executionMode === 'ERC4337'`):
+
+| Field | Description |
+|-------|-------------|
+| `executionMode` | `"ERC4337"` |
+| `status` | `"EXECUTED"` |
+| `userOpHash` | The UserOperation hash (bytes32) |
+| `txHash` | The on-chain transaction hash from `handleOps()` |
+| `blockNumber` | Block number of execution |
+| `entryPoint` | EntryPoint contract address used |
+| `accountType` | Detected account type (e.g., `"SimpleAccount"`, `"SmartAccount"`) |
 
 ### Explorer API
 
