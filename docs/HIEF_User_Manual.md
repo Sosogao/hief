@@ -1,6 +1,6 @@
 # HIEF Platform — User Manual
 
-**Version 1.2** | AI-Powered DeFi Intent Infrastructure with Multisig Support
+**Version 1.3** | AI-Powered DeFi Intent Infrastructure with Real MetaMask Multisig Signing
 
 ---
 
@@ -94,11 +94,13 @@ Multisig Mode is automatically activated when the connected account is a Gnosis 
    - The Safe TX Hash
    - Signature progress indicator (dots showing signed vs. pending)
    - A link to open the Gnosis Safe app for co-signers to approve
-9. Co-signers open the Safe app, review the transaction, and add their signatures.
-10. Once the threshold is reached, the user (or any co-signer) clicks **"✓ Simulate Co-Signer Approval & Execute"** (in the testnet demo environment) to execute the transaction.
-11. The transaction is broadcast and the intent status updates to **EXECUTED** with the transaction hash.
+9. A **"🦊 Sign with MetaMask & Execute"** button appears in the pending card.
+10. The user clicks the button. MetaMask opens and displays the **EIP-712 structured data** for the Safe transaction (showing the destination address, value, and calldata in a human-readable format).
+11. The user reviews and approves the signature in MetaMask. The AI's signature (collected automatically in step 7) and the user's MetaMask signature are combined.
+12. The backend calls `Safe.execTransaction()` on-chain with both signatures packed in the correct order (sorted by signer address, ascending).
+13. The transaction is broadcast and the intent status updates to **EXECUTED** with the transaction hash.
 
-**Note on Testnet Demo:** In the current Tenderly fork environment, the Gnosis Safe Transaction Service is not connected to the virtual network. The "Simulate Co-Signer Approval & Execute" button allows demonstrating the full multisig flow without requiring actual co-signer participation.
+**Note on Signature Types:** The AI signer uses an `eth_sign`-style signature (v=31/32), while the MetaMask user signs with `eth_signTypedData_v4` (v=27/28). The Gnosis Safe contract recognizes both signature types and verifies them correctly. If the user rejects the MetaMask signature request, the button resets and the user can retry.
 
 ---
 
@@ -141,7 +143,7 @@ The following API endpoints are available through the HIEF Gateway:
 | `GET` | `/v1/solver-network/auctions` | List recent auction results |
 | `GET` | `/v1/solver-network/simulation/:intentId` | Get pending simulation result |
 | `POST` | `/v1/solver-network/execute/:intentId` | Confirm and execute (Direct) or propose (Multisig) |
-| `POST` | `/v1/solver-network/multisig-confirm/:intentId` | Execute after co-signer approval |
+| `POST` | `/v1/solver-network/multisig-collect-signature/:intentId` | Receive co-signer EIP-712 signature and execute Safe TX on-chain |
 
 ### Explorer API
 
@@ -192,19 +194,25 @@ User Browser
 
 ## Change Log
 
-### Version 1.2 (Current)
+### Version 1.3 (Current)
+
+**Real MetaMask EIP-712 Multisig Signing**
+
+This release replaces the demo co-signer simulation button with a real MetaMask signature flow. When a multisig intent is proposed, the frontend now calls `eth_signTypedData_v4` via `window.ethereum` to request the user's EIP-712 signature for the Safe transaction. The signature is submitted to the new `/multisig-collect-signature` backend endpoint, which combines it with the AI's pre-computed signature and calls `Safe.execTransaction()` directly on the Tenderly fork. The Safe contract verifies both signatures and executes the transaction on-chain.
+
+### Version 1.2
 
 **Multisig Mode Support**
 
 This release introduces full support for Gnosis Safe multisig accounts. The system now automatically detects whether a user's account is a Gnosis Safe and routes the execution through the appropriate flow.
 
-The key changes across the codebase are as follows. In the **Solver Network**, a new `safeMultisig.ts` module was added containing `detectAccountMode()` (which queries the chain to determine if an address is a Safe and reads its threshold and owners) and `proposeSafeMultisig()` (which builds and submits a Safe transaction proposal to the Safe Transaction Service). The `runAuction()` function was updated to call `detectAccountMode()` before simulation, and the `/execute` endpoint now branches into Direct or Multisig paths based on the detected account type. A new `/multisig-confirm` endpoint was added to simulate co-signer approval in the testnet environment.
+The key changes across the codebase are as follows. In the **Solver Network**, a new `safeMultisig.ts` module was added containing `detectAccountMode()` (which queries the chain to determine if an address is a Safe and reads its threshold and owners) and `proposeSafeMultisig()` (which builds and submits a Safe transaction proposal to the Safe Transaction Service). The `runAuction()` function was updated to call `detectAccountMode()` before simulation, and the `/execute` endpoint now branches into Direct or Multisig paths based on the detected account type. A new `/multisig-collect-signature` endpoint was added to receive the co-signer's EIP-712 signature from MetaMask and call `Safe.execTransaction()` on-chain with both signatures combined.
 
 In the **Intent Bus**, two new endpoints were added: `POST /intents/:id/multisig-propose` stores the Safe proposal data and transitions the intent to `PROPOSING` status, while `GET /intents/:id/multisig-status` polls the Safe Transaction Service for the current signature count.
 
 The **Explorer API** was updated to expose `executionMode`, `multisigProposal`, and `pendingSignaturesAt` fields in both the list and detail responses.
 
-The **Frontend** received the most visible changes. New CSS styles were added for the `PROPOSING` status, multisig cards (purple theme), mode badges, and signature progress indicators. The `showSimulationCard()` function now renders different UI for Direct vs. Multisig modes. A new `showMultisigPendingCard()` function displays the pending signatures card with progress dots and a Safe app link. The `executeSettlement()` and `confirmMultisigExecution()` functions handle the respective execution paths.
+The **Frontend** received the most visible changes. New CSS styles were added for the `PROPOSING` status, multisig cards (purple theme), mode badges, and signature progress indicators. The `showSimulationCard()` function now renders different UI for Direct vs. Multisig modes. A new `showMultisigPendingCard()` function displays the pending signatures card with progress dots and the AI signer's address. The `executeSettlement()` and `requestMetaMaskSignature()` functions handle the respective execution paths.
 
 ### Version 1.1
 

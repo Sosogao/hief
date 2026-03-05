@@ -4,6 +4,24 @@ All notable changes to the HIEF platform are documented here.
 
 ---
 
+## [1.3.0] — 2025-01 — Real MetaMask EIP-712 Multisig Signing
+
+### Changed
+
+**`packages/solver-network/src/server.ts`** (modified)
+
+The multisig branch of the `POST /execute/:intentId` endpoint was substantially reworked. After calling `proposeSafeMultisig()`, the handler now builds a `SafeTxData` object and calls `buildSafeTxTypedData()` to produce the EIP-712 typed data structure. It then signs the `safeTxHash` with the AI's private key using `signMessage()` (producing an `eth_sign`-type signature with v=31/32). The `SafeTxData`, AI signature, AI signer address, `safeTxHash`, and full EIP-712 typed data object are all stored in the `pendingSimulations` map. The `/execute` response now includes `typedData` and `aiSignerAddress` fields for the frontend.
+
+The old `POST /v1/solver-network/multisig-confirm/:intentId` demo endpoint was replaced with `POST /v1/solver-network/multisig-collect-signature/:intentId`. This endpoint accepts `coSignerSignature` (MetaMask EIP-712 signature) and `coSignerAddress` from the request body. It retrieves the stored `safeTxData` and `aiSignature` from `pendingSimulations`, calls `executeWithSignatures()` to pack both signatures (sorted by signer address, ascending) and submit `execTransaction()` to the Safe contract on the Tenderly fork, then notifies the Intent Bus with the resulting transaction hash.
+
+**`apps/explorer/index.html`** (modified)
+
+The `showMultisigPendingCard()` function now stores the proposal data (including `typedData`) in a module-level `multisigProposals` map keyed by intent ID. The card now shows the AI signer's address with a checkmark and a **"🦊 Sign with MetaMask & Execute"** button.
+
+The `confirmMultisigExecution()` demo function was replaced with `requestMetaMaskSignature(intentId)`. This async function: (1) retrieves the stored `typedData`; (2) calls `eth_requestAccounts` to get the connected wallet address; (3) calls `eth_signTypedData_v4` with the EIP-712 typed data to request the user's MetaMask signature; (4) posts the signature to `/multisig-collect-signature/:intentId`; (5) displays the transaction hash on success. MetaMask rejection (error code 4001) is handled gracefully.
+
+---
+
 ## [1.2.0] — 2025-01 — Multisig Mode
 
 ### Added
