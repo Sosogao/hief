@@ -953,9 +953,13 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
       // Build EIP-712 typed data for frontend MetaMask signing
       const typedData = buildSafeTxTypedData(safeTxData, accountInfo.address, SETTLEMENT_CHAIN_ID);
 
-      // Compute AI's signature (sign the safeTxHash with the AI proposer key)
+      // Compute AI's signature using EIP-712 signTypedData (v=27/28).
+      // IMPORTANT: signMessage (eth_sign, v=31/32) is rejected by the Tenderly fork Safe.
       const aiWallet = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY);
-      const aiSignature = await aiWallet.signMessage(ethers.getBytes(multisigProposal.safeTxHash));
+      const { domain: aiDomain, types: aiTypes, message: aiMessage } = typedData;
+      const aiTypesNoDomain: Record<string, { name: string; type: string }[]> = { ...aiTypes };
+      delete aiTypesNoDomain.EIP712Domain;
+      const aiSignature = await aiWallet.signTypedData(aiDomain, aiTypesNoDomain, aiMessage);
 
       // Store safeTxData + AI signature in pendingSimulations (do NOT delete yet)
       const updatedPending = pendingSimulations.get(intentId);
