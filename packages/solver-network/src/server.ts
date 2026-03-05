@@ -29,7 +29,7 @@ import { detectAccountMode, proposeSafeMultisig, type AccountInfo, type SafeProp
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);
 const BUS_URL = process.env.BUS_URL || 'http://localhost:3001';
-const TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.base-sepolia.eu.rpc.tenderly.co/2aec27b5-9066-421e-a62d-31e1661403d9';
+const TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.base-sepolia.eu.rpc.tenderly.co/d8ee495e-1c03-4236-9615-b4a03b52069f';
 const SETTLEMENT_CHAIN_ID = parseInt(process.env.SETTLEMENT_CHAIN_ID || '99917', 10);
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '15000', 10);
 
@@ -263,9 +263,9 @@ async function generateQuote(
 // ─── Settlement Engine ───────────────────────────────────────────────────────
 // Tenderly Virtual Testnet config (Base Sepolia fork, chainId 99917)
 const TENDERLY_RPC = process.env.TENDERLY_RPC_URL ||
-  'https://virtual.base-sepolia.eu.rpc.tenderly.co/2aec27b5-9066-421e-a62d-31e1661403d9';
+  'https://virtual.base-sepolia.eu.rpc.tenderly.co/d8ee495e-1c03-4236-9615-b4a03b52069f';
 const SETTLEMENT_PRIVATE_KEY = process.env.SETTLEMENT_PRIVATE_KEY ||
-  '0x657a363c86654cbe2ff0136725d8361892fb7d48db2a1ae4abdd85a661d7a611';
+  '0xf2be7fd8f35f99b3838c9dc7e1bdbeccaefb9031ebd223a18c1a8e54f5bb780d';
 const WETH_ADDRESS = '0x4200000000000000000000000000000000000006';
 const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
 const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD';
