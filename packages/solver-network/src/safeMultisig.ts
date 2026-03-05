@@ -45,6 +45,7 @@ const SAFE_ABI = [
   'function getThreshold() view returns (uint256)',
   'function getOwners() view returns (address[])',
   'function nonce() view returns (uint256)',
+  'function execTransaction(address to, uint256 value, bytes calldata data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address payable refundReceiver, bytes memory signatures) payable returns (bool success)',
 ];
 
 /** Safe Transaction Service URLs by chainId */
@@ -276,5 +277,132 @@ export async function proposeSafeMultisig(params: {
     proposedAt: Math.floor(Date.now() / 1000),
     safeServiceUrl: serviceUrl,
     signingUrl,
+  };
+}
+
+// ─── Execute Safe TX with collected signatures ────────────────────────────────
+
+export interface SafeTxData {
+  to: string;
+  value: string;
+  data: string;
+  operation: number;
+  safeTxGas: string;
+  baseGas: string;
+  gasPrice: string;
+  gasToken: string;
+  refundReceiver: string;
+  nonce: number;
+}
+
+/**
+ * Execute a Safe transaction on-chain using two collected signatures.
+ * Safe requires signatures to be sorted by signer address (ascending).
+ *
+ * @param safeAddress  - The Gnosis Safe contract address
+ * @param safeTx       - The Safe transaction parameters
+ * @param sig1         - Signature from signer1 (raw 65-byte hex)
+ * @param signer1      - Address of signer1
+ * @param sig2         - Signature from signer2 (raw 65-byte hex)
+ * @param signer2      - Address of signer2
+ * @param executorKey  - Private key of the executor (pays gas, can be any owner)
+ * @param rpcUrl       - RPC endpoint
+ */
+export async function executeWithSignatures(params: {
+  safeAddress: string;
+  safeTx: SafeTxData;
+  sig1: string;
+  signer1: string;
+  sig2: string;
+  signer2: string;
+  executorKey: string;
+  rpcUrl: string;
+}): Promise<{ txHash: string; blockNumber: number }> {
+  const { safeAddress, safeTx, sig1, signer1, sig2, signer2, executorKey, rpcUrl } = params;
+
+  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const executor = new ethers.Wallet(executorKey, provider);
+  const safeContract = new ethers.Contract(safeAddress, SAFE_ABI, executor);
+
+  // Safe requires signatures sorted by signer address (ascending, case-insensitive)
+  let packedSigs: string;
+  if (signer1.toLowerCase() < signer2.toLowerCase()) {
+    // sig1 first, then sig2
+    packedSigs = sig1.startsWith('0x') ? sig1 : '0x' + sig1;
+    const s2 = sig2.startsWith('0x') ? sig2.slice(2) : sig2;
+    packedSigs += s2;
+  } else {
+    // sig2 first, then sig1
+    packedSigs = sig2.startsWith('0x') ? sig2 : '0x' + sig2;
+    const s1 = sig1.startsWith('0x') ? sig1.slice(2) : sig1;
+    packedSigs += s1;
+  }
+
+  console.log(`[SafeMultisig] Executing Safe TX | to: ${safeTx.to} | nonce: ${safeTx.nonce}`);
+  console.log(`[SafeMultisig] Signers: ${signer1.slice(0,10)}... & ${signer2.slice(0,10)}...`);
+
+  const tx = await safeContract.execTransaction(
+    safeTx.to,
+    BigInt(safeTx.value),
+    safeTx.data,
+    safeTx.operation,
+    BigInt(safeTx.safeTxGas),
+    BigInt(safeTx.baseGas),
+    BigInt(safeTx.gasPrice),
+    safeTx.gasToken,
+    safeTx.refundReceiver,
+    packedSigs,
+    { gasLimit: 500000 }
+  );
+
+  const receipt = await tx.wait();
+  const txHash = receipt?.hash || tx.hash;
+  const blockNumber = receipt?.blockNumber || 0;
+
+  console.log(`[SafeMultisig] ✅ execTransaction confirmed | txHash: ${txHash} | block: ${blockNumber}`);
+  return { txHash, blockNumber };
+}
+
+/**
+ * Build the EIP-712 typed data for a Safe transaction.
+ * Used by the frontend to call eth_signTypedData_v4 via MetaMask.
+ */
+export function buildSafeTxTypedData(safeTx: SafeTxData, safeAddress: string, chainId: number) {
+  return {
+    types: {
+      EIP712Domain: [
+        { name: 'chainId', type: 'uint256' },
+        { name: 'verifyingContract', type: 'address' },
+      ],
+      SafeTx: [
+        { name: 'to', type: 'address' },
+        { name: 'value', type: 'uint256' },
+        { name: 'data', type: 'bytes' },
+        { name: 'operation', type: 'uint8' },
+        { name: 'safeTxGas', type: 'uint256' },
+        { name: 'baseGas', type: 'uint256' },
+        { name: 'gasPrice', type: 'uint256' },
+        { name: 'gasToken', type: 'address' },
+        { name: 'refundReceiver', type: 'address' },
+        { name: 'nonce', type: 'uint256' },
+      ],
+    },
+    primaryType: 'SafeTx',
+    domain: {
+      chainId: chainId.toString(),
+      verifyingContract: safeAddress,
+    },
+    message: {
+      to: safeTx.to,
+      value: safeTx.value,
+      data: safeTx.data,
+      operation: safeTx.operation,
+      safeTxGas: safeTx.safeTxGas,
+      baseGas: safeTx.baseGas,
+      gasPrice: safeTx.gasPrice,
+      gasToken: safeTx.gasToken,
+      refundReceiver: safeTx.refundReceiver,
+      nonce: safeTx.nonce,
+    },
   };
 }

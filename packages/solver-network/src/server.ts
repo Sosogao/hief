@@ -24,7 +24,7 @@ import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
 import initSqlJs from 'sql.js';
-import { detectAccountMode, proposeSafeMultisig, type AccountInfo, type SafeProposalResult } from './safeMultisig';
+import { detectAccountMode, proposeSafeMultisig, executeWithSignatures, buildSafeTxTypedData, type AccountInfo, type ExecutionMode, type SafeTxData, type SafeProposalResult } from './safeMultisig';
 
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);
@@ -493,6 +493,12 @@ const pendingSimulations = new Map<string, {
   winner: SolverQuote;
   simulation: SimulationResult;
   accountInfo?: AccountInfo;
+  // Multisig mode: stored after /execute is called
+  safeTxData?: SafeTxData;
+  aiSignature?: string;        // AI proposer's signature (sig1)
+  aiSignerAddress?: string;    // AI proposer's address
+  safeTxHash?: string;         // EIP-712 hash
+  safeTxTypedData?: any;       // Full EIP-712 typed data for frontend MetaMask call
 }>();
 
 async function runAuction(intentId: string, intentHash: string, intent: any): Promise<AuctionResult> {
@@ -915,18 +921,52 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
       console.log(`[SafeMultisig] User confirmed multisig proposal for ${intentId.slice(0, 16)}... Proposing Safe TX...`);
       const wethInterface = new ethers.Interface(['function deposit() payable']);
       const depositData = wethInterface.encodeFunctionData('deposit', []);
+      const txTo = WETH_ADDRESS;
+      const txValue = ethers.parseEther('0.001').toString();
+      const txData = depositData;
       const proposal = await proposeSafeMultisig({
         safeAddress: accountInfo.address,
         chainId: SETTLEMENT_CHAIN_ID,
         rpcUrl: TENDERLY_RPC_URL,
         proposerPrivateKey: SETTLEMENT_PRIVATE_KEY,
-        to: WETH_ADDRESS,
-        value: ethers.parseEther('0.001').toString(),
-        data: depositData,
+        to: txTo,
+        value: txValue,
+        data: txData,
         intentId,
       });
       const multisigProposal = { ...proposal, threshold: accountInfo.threshold };
-      pendingSimulations.delete(intentId);
+
+      // Build the SafeTxData object for later execution
+      const safeTxData: SafeTxData = {
+        to: txTo,
+        value: txValue,
+        data: txData,
+        operation: 0,
+        safeTxGas: '0',
+        baseGas: '0',
+        gasPrice: '0',
+        gasToken: ethers.ZeroAddress,
+        refundReceiver: ethers.ZeroAddress,
+        nonce: multisigProposal.nonce,
+      };
+
+      // Build EIP-712 typed data for frontend MetaMask signing
+      const typedData = buildSafeTxTypedData(safeTxData, accountInfo.address, SETTLEMENT_CHAIN_ID);
+
+      // Compute AI's signature (sign the safeTxHash with the AI proposer key)
+      const aiWallet = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY);
+      const aiSignature = await aiWallet.signMessage(ethers.getBytes(multisigProposal.safeTxHash));
+
+      // Store safeTxData + AI signature in pendingSimulations (do NOT delete yet)
+      const updatedPending = pendingSimulations.get(intentId);
+      if (updatedPending) {
+        updatedPending.safeTxData = safeTxData;
+        updatedPending.aiSignature = aiSignature;
+        updatedPending.aiSignerAddress = aiWallet.address;
+        updatedPending.safeTxHash = multisigProposal.safeTxHash;
+        updatedPending.safeTxTypedData = typedData;
+      }
+
       // Notify Intent Bus: status → PENDING_SIGNATURES
       await fetch(`${BUS_URL}/v1/intents/${intentId}/multisig-propose`, {
         method: 'POST',
@@ -936,7 +976,7 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
       // Update auction history
       const historyEntry = auctionHistory.find(a => a.intentId === intentId);
       if (historyEntry) { historyEntry.multisigProposal = multisigProposal; historyEntry.executionMode = 'MULTISIG'; }
-      console.log(`[SafeMultisig] ✅ Proposal submitted | safeTxHash: ${multisigProposal.safeTxHash.slice(0, 16)}... | threshold: ${accountInfo.threshold}`);
+      console.log(`[SafeMultisig] ✅ Proposal submitted | safeTxHash: ${multisigProposal.safeTxHash.slice(0, 16)}... | threshold: ${accountInfo.threshold} | awaiting co-signer via MetaMask`);
       res.json({
         success: true,
         data: {
@@ -948,6 +988,10 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
           owners: accountInfo.owners,
           signingUrl: multisigProposal.signingUrl,
           safeServiceUrl: multisigProposal.safeServiceUrl,
+          // EIP-712 typed data for MetaMask eth_signTypedData_v4
+          typedData,
+          aiSignerAddress: aiWallet.address,
+          chainId: SETTLEMENT_CHAIN_ID,
         },
       });
     } catch (err: any) {
@@ -990,43 +1034,65 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
   }
 });
 
-// POST /v1/solver-network/multisig-confirm/:intentId — co-signer confirmed, execute the Safe TX on-chain
-// Called after all required signatures are collected (or for testing: force-execute)
-app.post('/v1/solver-network/multisig-confirm/:intentId', async (req: Request, res: Response) => {
+// POST /v1/solver-network/multisig-collect-signature/:intentId
+// Receives the co-signer's EIP-712 signature from the frontend (MetaMask eth_signTypedData_v4).
+// Once received, combines with AI's signature and calls Safe.execTransaction() on-chain.
+app.post('/v1/solver-network/multisig-collect-signature/:intentId', async (req: Request, res: Response) => {
   const { intentId } = req.params;
-  // For the Tenderly fork demo: we execute the settlement tx directly since Safe TX Service
-  // can't execute on a virtual testnet. In production this would relay via Safe Relay.
+  const { coSignerSignature, coSignerAddress } = req.body as { coSignerSignature: string; coSignerAddress: string };
+
+  if (!coSignerSignature || !coSignerAddress) {
+    res.status(400).json({ success: false, error: 'coSignerSignature and coSignerAddress are required' });
+    return;
+  }
+
+  const pending = pendingSimulations.get(intentId);
+  if (!pending || !pending.safeTxData || !pending.aiSignature || !pending.aiSignerAddress) {
+    res.status(404).json({ success: false, error: 'No pending multisig proposal found for this intent. Call /execute first.' });
+    return;
+  }
+
+  const { safeTxData, aiSignature, aiSignerAddress, accountInfo } = pending;
+
   try {
-    // Re-fetch intent from bus to get the stored multisig proposal
-    const detailRes = await fetch(`http://localhost:3006/v1/explorer/intents/${intentId}`);
-    if (!detailRes.ok) {
-      res.status(404).json({ success: false, error: 'Intent not found' });
-      return;
-    }
-    const detail = await detailRes.json() as any;
-    const intentData = detail.data;
-    const intent = intentData?.intent || {};
-    // Execute on Tenderly fork (simulating Safe execution)
-    const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
-    const wallet = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY, provider);
-    const wethContract = new ethers.Contract(WETH_ADDRESS, ['function deposit() payable'], wallet);
-    const tx = await wethContract.deposit({ value: ethers.parseEther('0.001') });
-    const receipt = await tx.wait();
-    const txHash = receipt?.hash || tx.hash;
-    const blockNumber = receipt?.blockNumber || 0;
+    console.log(`[SafeMultisig] Co-signer signature received from ${coSignerAddress.slice(0, 10)}... | Executing Safe TX on-chain...`);
+
+    const { txHash, blockNumber } = await executeWithSignatures({
+      safeAddress: accountInfo!.address,
+      safeTx: safeTxData,
+      sig1: aiSignature,
+      signer1: aiSignerAddress,
+      sig2: coSignerSignature,
+      signer2: coSignerAddress,
+      executorKey: SETTLEMENT_PRIVATE_KEY,
+      rpcUrl: TENDERLY_RPC_URL,
+    });
+
+    // Clean up pending state
+    pendingSimulations.delete(intentId);
+
     // Notify Intent Bus: EXECUTED
     await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ txHash, txStatus: 'success' }),
-    });
-    console.log(`[SafeMultisig] ✅ Multisig EXECUTED | txHash: ${txHash} | block: ${blockNumber}`);
+    }).catch(() => {});
+
+    // Update auction history
+    const historyEntry = auctionHistory.find(a => a.intentId === intentId);
+    if (historyEntry) {
+      historyEntry.settlementTxHash = txHash;
+      historyEntry.settlementBlock = blockNumber;
+      historyEntry.settlementStatus = 'success';
+    }
+
+    console.log(`[SafeMultisig] ✅ Multisig EXECUTED on-chain | txHash: ${txHash} | block: ${blockNumber}`);
     res.json({
       success: true,
       data: { intentId, executionMode: 'MULTISIG', txHash, blockNumber, status: 'EXECUTED' },
     });
   } catch (err: any) {
-    console.error(`[SafeMultisig] ❌ Multisig execution failed: ${err.message}`);
+    console.error(`[SafeMultisig] ❌ execTransaction failed: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   }
 });

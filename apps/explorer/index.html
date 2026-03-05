@@ -832,7 +832,13 @@ async function executeSettlement(intentId, isMultisig) {
 }
 
 // Show multisig pending card with signature progress and confirm button
+// Store the latest proposal data keyed by intentId for MetaMask signing
+var multisigProposals = {};
+
 function showMultisigPendingCard(intentId, proposalData) {
+  // Store proposal data for MetaMask signing
+  multisigProposals[intentId] = proposalData;
+
   var container = document.getElementById('chatMessages');
   var cardDiv = document.createElement('div');
   cardDiv.id = 'msCard-'+intentId;
@@ -849,10 +855,10 @@ function showMultisigPendingCard(intentId, proposalData) {
   var safeTxHash = proposalData.safeTxHash || '';
   var threshold = proposalData.threshold || 2;
   var owners = proposalData.owners || [];
-  var signingUrl = proposalData.signingUrl || '';
   var shortSafeTx = safeTxHash ? safeTxHash.slice(0,10)+'...'+safeTxHash.slice(-8) : 'N/A';
+  var aiSignerShort = proposalData.aiSignerAddress ? proposalData.aiSignerAddress.slice(0,10)+'...' : 'AI Signer';
 
-  // Signature progress dots
+  // Signature progress dots: first dot = AI signed, rest = pending
   var sigDots = '';
   for (var i = 0; i < Math.max(threshold, owners.length || threshold); i++) {
     sigDots += '<div class="sig-dot ' + (i === 0 ? 'signed' : 'pending') + '">' + (i === 0 ? '✓' : (i+1)) + '</div>';
@@ -860,21 +866,19 @@ function showMultisigPendingCard(intentId, proposalData) {
 
   var html = '<div class="multisig-card">';
   html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
-  html += '<div style="font-size:13px;font-weight:700;color:#a78bfa;">🔐 Awaiting Co-Signatures</div>';
+  html += '<div style="font-size:13px;font-weight:700;color:#a78bfa;">🔐 Awaiting Your Signature</div>';
   html += '<span class="mode-badge-multisig">' + threshold + '-of-' + (owners.length || threshold) + '</span>';
   html += '</div>';
   html += '<div class="sim-row"><span class="sim-label">Status</span><span class="sim-value" style="color:#a78bfa;">🔐 PENDING_SIGNATURES</span></div>';
   html += '<div class="sim-row"><span class="sim-label">Safe TX Hash</span><span class="sim-value" style="font-size:10px;">' + shortSafeTx + '</span></div>';
   html += '<div class="sim-row"><span class="sim-label">Required Signatures</span><span class="sim-value">' + threshold + ' of ' + (owners.length || threshold) + '</span></div>';
+  html += '<div class="sim-row"><span class="sim-label">AI Signer</span><span class="sim-value" style="color:#c084fc;font-size:10px;">' + aiSignerShort + ' ✓ Signed</span></div>';
   html += '<div style="margin:10px 0 6px;font-size:11px;color:#94a3b8;">Signature Progress:</div>';
   html += '<div class="sig-progress">' + sigDots + '</div>';
-  html += '<div style="font-size:10px;color:#64748b;margin-bottom:10px;">1 signature collected (AI proposer). ' + (threshold-1) + ' more required.</div>';
-  if (signingUrl) {
-    html += '<a href="' + signingUrl + '" target="_blank" style="display:block;text-align:center;padding:8px;background:rgba(124,58,237,0.2);border:1px solid rgba(124,58,237,0.4);border-radius:8px;color:#a78bfa;font-size:12px;font-weight:600;text-decoration:none;margin-bottom:8px;">Open Safe App to Sign ↗</a>';
-  }
-  html += '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">For demo: click below to simulate co-signer approval and execute on Tenderly fork.</div>';
-  html += '<button class="btn-multisig" id="btnMsConfirm-'+intentId+'" onclick="confirmMultisigExecution(\''+intentId+'\')">';
-  html += '✓ Simulate Co-Signer Approval & Execute';
+  html += '<div style="font-size:10px;color:#64748b;margin-bottom:10px;">1 of ' + threshold + ' signatures collected (AI proposer). Your MetaMask signature required.</div>';
+  html += '<div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">Sign the Safe transaction with your wallet (0x7d73...) to authorize execution.</div>';
+  html += '<button class="btn-multisig" id="btnMsConfirm-'+intentId+'" onclick="requestMetaMaskSignature(\''+intentId+'\')">';
+  html += '🦊 Sign with MetaMask & Execute';
   html += '</button>';
   html += '</div>';
 
@@ -885,21 +889,53 @@ function showMultisigPendingCard(intentId, proposalData) {
   container.scrollTop = container.scrollHeight;
 }
 
-// Simulate co-signer approval and execute the multisig TX on Tenderly fork
-async function confirmMultisigExecution(intentId) {
+// Request EIP-712 signature from MetaMask and submit to backend
+async function requestMetaMaskSignature(intentId) {
   var btn = document.getElementById('btnMsConfirm-'+intentId);
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Executing multisig TX...'; }
-  appendChatMessage('system', '✓ Co-signer approved! Executing Safe TX on Tenderly fork...');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Waiting for MetaMask...'; }
+
+  var proposalData = multisigProposals[intentId];
+  if (!proposalData || !proposalData.typedData) {
+    appendChatMessage('system', '⚠️ Missing EIP-712 typed data. Please retry the proposal.');
+    if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign with MetaMask & Execute'; }
+    return;
+  }
+
+  // Check MetaMask is available
+  if (!window.ethereum) {
+    appendChatMessage('system', '⚠️ MetaMask not found. Please install MetaMask extension.');
+    if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign with MetaMask & Execute'; }
+    return;
+  }
+
   try {
-    var execRes = await fetch(SOLVER_API+'/v1/solver-network/multisig-confirm/'+intentId, {
+    // Request account access
+    var accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    var coSignerAddress = accounts[0];
+    appendChatMessage('system', '🦊 MetaMask connected: ' + coSignerAddress.slice(0,10) + '...');
+
+    // Request EIP-712 typed data signature
+    appendChatMessage('system', '🔐 Requesting Safe TX signature from MetaMask...');
+    var typedDataStr = JSON.stringify(proposalData.typedData);
+    var coSignerSignature = await window.ethereum.request({
+      method: 'eth_signTypedData_v4',
+      params: [coSignerAddress, typedDataStr]
+    });
+
+    appendChatMessage('system', '✅ Signature received! Submitting to backend...');
+    if (btn) { btn.textContent = '⏳ Executing on-chain...'; }
+
+    // Submit signature to backend
+    var collectRes = await fetch(SOLVER_API+'/v1/solver-network/multisig-collect-signature/'+intentId, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({})
+      body: JSON.stringify({ coSignerSignature, coSignerAddress })
     });
-    var execJson = await execRes.json();
-    if (execRes.ok && execJson.success) {
-      var txHash = execJson.data.txHash;
-      var blockNum = execJson.data.blockNumber;
+    var collectJson = await collectRes.json();
+
+    if (collectRes.ok && collectJson.success) {
+      var txHash = collectJson.data.txHash;
+      var blockNum = collectJson.data.blockNumber;
       var shortTx = txHash.slice(0,10)+'...'+txHash.slice(-8);
       var tenderlyUrl = 'https://dashboard.tenderly.co/tx/'+txHash;
       if (btn) { btn.textContent = '✅ Multisig Executed!'; btn.style.background = '#1a3a2a'; }
@@ -910,14 +946,20 @@ async function confirmMultisigExecution(intentId) {
       linkDiv.innerHTML = '<div class="w-7 h-7 rounded-full bg-violet-900 flex items-center justify-center text-xs font-bold flex-shrink-0">🔐</div><div class="flex-1 max-w-lg"><div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-xs font-mono text-violet-400 bg-violet-900/20">Multisig TX: <a href="'+tenderlyUrl+'" target="_blank" class="text-violet-300 hover:underline">'+shortTx+'</a></div></div>';
       container.appendChild(linkDiv);
       container.scrollTop = container.scrollHeight;
+      // Clean up stored proposal
+      delete multisigProposals[intentId];
       setTimeout(loadStats, 1500);
     } else {
-      if (btn) { btn.disabled = false; btn.textContent = '✓ Retry Execution'; }
-      appendChatMessage('system', '⚠️ Multisig execution failed: '+(execJson.error||JSON.stringify(execJson)));
+      if (btn) { btn.disabled = false; btn.textContent = '🦊 Retry Sign & Execute'; }
+      appendChatMessage('system', '⚠️ Execution failed: '+(collectJson.error||JSON.stringify(collectJson)));
     }
   } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = '✓ Retry Execution'; }
-    appendChatMessage('system', '⚠️ Error: '+e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign with MetaMask & Execute'; }
+    if (e.code === 4001) {
+      appendChatMessage('system', '⚠️ MetaMask: User rejected the signature request.');
+    } else {
+      appendChatMessage('system', '⚠️ Error: '+e.message);
+    }
   }
 }
 
