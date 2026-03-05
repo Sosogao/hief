@@ -145,8 +145,13 @@ async function proposeSafeMultisig(params) {
     const safeTx = buildSafeTxData(to, value, data, nonce);
     // Compute EIP-712 hash
     const safeTxHash = computeSafeTxHash(safeTx, safeAddress, chainId);
-    // Sign the safeTxHash with the proposer's key
-    const signature = await proposerWallet.signMessage(ethers_1.ethers.getBytes(safeTxHash));
+    // Sign using EIP-712 signTypedData (v=27/28) — required by this Safe contract.
+    // Note: signMessage (eth_sign, v=31/32) is rejected by the Tenderly fork Safe.
+    const typedDataForSigning = buildSafeTxTypedData(safeTx, safeAddress, chainId);
+    const { domain: sigDomain, types: sigTypes, message: sigMessage } = typedDataForSigning;
+    const typesWithoutDomain = { ...sigTypes };
+    delete typesWithoutDomain.EIP712Domain;
+    const signature = await proposerWallet.signTypedData(sigDomain, typesWithoutDomain, sigMessage);
     // Determine Safe Transaction Service URL
     const serviceUrl = SAFE_TX_SERVICE[chainId] || SAFE_TX_SERVICE[84532];
     // Submit to Safe Transaction Service

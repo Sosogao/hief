@@ -100,7 +100,7 @@ Multisig Mode is automatically activated when the connected account is a Gnosis 
 12. The backend calls `Safe.execTransaction()` on-chain with both signatures packed in the correct order (sorted by signer address, ascending).
 13. The transaction is broadcast and the intent status updates to **EXECUTED** with the transaction hash.
 
-**Note on Signature Types:** The AI signer uses an `eth_sign`-style signature (v=31/32), while the MetaMask user signs with `eth_signTypedData_v4` (v=27/28). The Gnosis Safe contract recognizes both signature types and verifies them correctly. If the user rejects the MetaMask signature request, the button resets and the user can retry.
+**Note on Signature Types:** Both the AI signer and the MetaMask user sign using `eth_signTypedData_v4` (EIP-712, v=27/28). This is required by the Gnosis Safe contract on the Tenderly fork — `eth_sign`-style signatures (v=31/32) are not accepted. Signatures are sorted by signer address (ascending) before being packed, as required by the Safe contract. If the user rejects the MetaMask signature request, the button resets and the user can retry.
 
 ---
 
