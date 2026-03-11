@@ -94,7 +94,9 @@ const SERVICES = [
     args: ['dist/server.js'],
     env: {
       PORT: '3008',
-      BUS_URL: 'http://localhost:3001'
+      BUS_URL: 'http://localhost:3001',
+      TENDERLY_RPC_URL: 'https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d',
+      SETTLEMENT_CHAIN_ID: '1',
     },
     pathPrefixes: ['/v1/solver-network'],
     healthPath: '/health'

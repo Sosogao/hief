@@ -62,6 +62,7 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const safeMultisig_1 = require("./safeMultisig");
 const erc4337_1 = require("./erc4337");
+const safe4337_1 = require("./safe4337");
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);
 const BUS_URL = process.env.BUS_URL || 'http://localhost:3001';
@@ -583,8 +584,72 @@ async function runAuction(intentId, intentHash, intent) {
                             simulation: simResult, executionMode: 'MULTISIG', accountInfo, multisigProposal,
                         };
                     }
+                    else if (executionMode === 'ERC4337_SAFE' && accountInfo?.isSafe4337) {
+                        // ─── ERC4337_SAFE MODE ────────────────────────────────────────────────
+                        // Build UserOperation, compute hash, prepare typed data for MetaMask
+                        try {
+                            console.log(`[Safe4337] Building UserOp for ${intentId.slice(0, 16)}... | Safe: ${accountInfo.address.slice(0, 10)}...`);
+                            const wethInterface = new ethers_1.ethers.Interface(['function deposit() payable']);
+                            const depositData = wethInterface.encodeFunctionData('deposit', []);
+                            const userOp = await (0, safe4337_1.buildSafe4337UserOperation)({
+                                safeAddress: accountInfo.address,
+                                to: WETH_ADDRESS,
+                                value: ethers_1.ethers.parseEther('0.001'),
+                                data: depositData,
+                                operation: 0,
+                                rpcUrl: TENDERLY_RPC_URL,
+                            });
+                            const userOpHash = await (0, safe4337_1.computeUserOpHash)(userOp, TENDERLY_RPC_URL);
+                            const typedData = await (0, safe4337_1.buildUserOpTypedData)(userOp, userOpHash, SETTLEMENT_CHAIN_ID, TENDERLY_RPC_URL);
+                            // Store pending simulation with Safe4337 context
+                            pendingSimulations.set(intentId, {
+                                intent, winner, simulation: simResult, accountInfo,
+                                safe4337UserOp: userOp,
+                                safe4337UserOpHash: userOpHash,
+                                safe4337TypedData: typedData,
+                            });
+                            await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    simulation: simResult,
+                                    executionMode: 'ERC4337_SAFE',
+                                    accountInfo: {
+                                        address: accountInfo.address,
+                                        entryPoint: safe4337_1.ENTRY_POINT_V07,
+                                        accountType: 'Safe4337',
+                                        module: safe4337_1.SAFE_4337_MODULE_V030,
+                                        owners: accountInfo.owners,
+                                        threshold: accountInfo.threshold,
+                                    },
+                                    userOpHash,
+                                }),
+                            }).catch(() => { });
+                            console.log(`[Safe4337] ✅ UserOp built | userOpHash: ${userOpHash.slice(0, 16)}... | awaiting MetaMask signature`);
+                            return {
+                                intentId, intentHash, quotes, winner, winnerReason, auctionDurationMs,
+                                submittedSolutionId, submittedAt: Math.floor(Date.now() / 1000),
+                                simulation: simResult, executionMode: 'ERC4337_SAFE', accountInfo,
+                            };
+                        }
+                        catch (safe4337Err) {
+                            console.error(`[Safe4337] ❌ UserOp build failed: ${safe4337Err.message}. Falling back to DIRECT.`);
+                            executionMode = 'DIRECT';
+                            pendingSimulations.set(intentId, { intent, winner, simulation: simResult, accountInfo });
+                            await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ simulation: simResult, executionMode: 'DIRECT' }),
+                            }).catch(() => { });
+                            return {
+                                intentId, intentHash, quotes, winner, winnerReason, auctionDurationMs,
+                                submittedSolutionId, submittedAt: Math.floor(Date.now() / 1000),
+                                simulation: simResult, executionMode: 'DIRECT', accountInfo,
+                            };
+                        }
+                    }
                     else if (executionMode === 'ERC4337' && accountInfo?.isERC4337) {
-                        // ─── ERC-4337 MODE ────────────────────────────────────────────────────
+                        // ─── ERC-4337 MODE (SimpleAccount / generic AA) ───────────────────────
                         // Store pending simulation — ERC-4337 execution happens at /execute
                         pendingSimulations.set(intentId, { intent, winner, simulation: simResult, accountInfo });
                         await fetch(`${BUS_URL}/v1/intents/${intentId}/simulate`, {
@@ -833,7 +898,61 @@ app.post('/v1/solver-network/execute/:intentId', async (req, res) => {
     const { intent, winner, accountInfo } = pending;
     const isMultisig = accountInfo?.mode === 'MULTISIG' && accountInfo?.isSafe;
     const isERC4337 = accountInfo?.mode === 'ERC4337' && accountInfo?.isERC4337;
-    if (isERC4337) {
+    const isSafe4337 = accountInfo?.mode === 'ERC4337_SAFE' && accountInfo?.isSafe4337;
+    if (isSafe4337) {
+        // ─── ERC4337_SAFE MODE: Build UserOp, return typed data for MetaMask ────────
+        try {
+            console.log(`[Safe4337] User confirmed Safe4337 execution for ${intentId.slice(0, 16)}... Preparing UserOp...`);
+            // Check if UserOp was already built during simulation phase
+            let userOp = pending.safe4337UserOp;
+            let userOpHash = pending.safe4337UserOpHash;
+            let typedData = pending.safe4337TypedData;
+            if (!userOp || !userOpHash || !typedData) {
+                // Build fresh UserOp if not cached
+                const wethInterface = new ethers_1.ethers.Interface(['function deposit() payable']);
+                const depositData = wethInterface.encodeFunctionData('deposit', []);
+                userOp = await (0, safe4337_1.buildSafe4337UserOperation)({
+                    safeAddress: accountInfo.address,
+                    to: WETH_ADDRESS,
+                    value: ethers_1.ethers.parseEther('0.001'),
+                    data: depositData,
+                    operation: 0,
+                    rpcUrl: TENDERLY_RPC_URL,
+                });
+                userOpHash = await (0, safe4337_1.computeUserOpHash)(userOp, TENDERLY_RPC_URL);
+                typedData = await (0, safe4337_1.buildUserOpTypedData)(userOp, userOpHash, SETTLEMENT_CHAIN_ID, TENDERLY_RPC_URL);
+                // Cache for collect-signature endpoint
+                const updatedPending = pendingSimulations.get(intentId);
+                if (updatedPending) {
+                    updatedPending.safe4337UserOp = userOp;
+                    updatedPending.safe4337UserOpHash = userOpHash;
+                    updatedPending.safe4337TypedData = typedData;
+                }
+            }
+            console.log(`[Safe4337] ✅ UserOp ready | userOpHash: ${userOpHash.slice(0, 16)}... | awaiting MetaMask signature`);
+            res.json({
+                success: true,
+                data: {
+                    intentId,
+                    executionMode: 'ERC4337_SAFE',
+                    status: 'PENDING_USER_SIGNATURE',
+                    userOpHash,
+                    userOpTypedData: typedData, // field name expected by frontend requestSafe4337Signature()
+                    safeAddress: accountInfo.address,
+                    entryPoint: safe4337_1.ENTRY_POINT_V07,
+                    module: safe4337_1.SAFE_4337_MODULE_V030,
+                    chainId: SETTLEMENT_CHAIN_ID,
+                    owners: accountInfo.owners,
+                    threshold: accountInfo.threshold,
+                },
+            });
+        }
+        catch (err) {
+            console.error(`[Safe4337] ❌ UserOp preparation failed: ${err.message}`);
+            res.status(500).json({ success: false, error: err.message });
+        }
+    }
+    else if (isERC4337) {
         // ─── ERC-4337 MODE: Build UserOp, sign, submit via EntryPoint ──────────────────────────────
         try {
             console.log(`[ERC4337] User confirmed ERC-4337 execution for ${intentId.slice(0, 16)}... Building UserOp...`);
@@ -1024,6 +1143,67 @@ app.post('/v1/solver-network/execute/:intentId', async (req, res) => {
             }).catch(() => { });
             res.status(500).json({ success: false, error: err.message });
         }
+    }
+});
+// POST /v1/solver-network/safe4337-collect-signature/:intentId
+// Receives the user's EIP-712 UserOp signature from MetaMask.
+// Submits the signed UserOperation via EntryPoint.handleOps().
+app.post('/v1/solver-network/safe4337-collect-signature/:intentId', async (req, res) => {
+    const { intentId } = req.params;
+    const { userSignature, signerAddress } = req.body;
+    if (!userSignature || !signerAddress) {
+        res.status(400).json({ success: false, error: 'userSignature and signerAddress are required' });
+        return;
+    }
+    const pending = pendingSimulations.get(intentId);
+    if (!pending || !pending.safe4337UserOp || !pending.safe4337UserOpHash) {
+        res.status(404).json({ success: false, error: 'No pending Safe4337 UserOp found. Call /execute first.' });
+        return;
+    }
+    const { safe4337UserOp, accountInfo } = pending;
+    try {
+        console.log(`[Safe4337] User signature received from ${signerAddress.slice(0, 10)}... | Submitting UserOp via EntryPoint...`);
+        const result = await (0, safe4337_1.executeSafe4337WithSignature)({
+            userOp: safe4337UserOp,
+            userSignature,
+            rpcUrl: TENDERLY_RPC_URL,
+            submitterKey: SETTLEMENT_PRIVATE_KEY,
+        });
+        // Clean up pending state
+        pendingSimulations.delete(intentId);
+        // Notify Intent Bus: EXECUTED
+        await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ txHash: result.txHash, txStatus: 'success' }),
+        }).catch(() => { });
+        // Update auction history
+        const historyEntry = auctionHistory.find(a => a.intentId === intentId);
+        if (historyEntry) {
+            historyEntry.settlementTxHash = result.txHash;
+            historyEntry.settlementBlock = result.blockNumber;
+            historyEntry.settlementStatus = 'success';
+            historyEntry.executionMode = 'ERC4337_SAFE';
+            historyEntry.safe4337Result = result;
+        }
+        console.log(`[Safe4337] ✅ UserOp EXECUTED | userOpHash: ${result.userOpHash.slice(0, 16)}... | txHash: ${result.txHash.slice(0, 16)}... | block: ${result.blockNumber}`);
+        res.json({
+            success: true,
+            data: {
+                intentId,
+                executionMode: 'ERC4337_SAFE',
+                status: 'EXECUTED',
+                userOpHash: result.userOpHash,
+                txHash: result.txHash,
+                blockNumber: result.blockNumber,
+                safeAddress: result.safeAddress,
+                entryPoint: result.entryPoint,
+            },
+        });
+    }
+    catch (err) {
+        console.error(`[Safe4337] ❌ UserOp execution failed: ${err.message}`);
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 // POST /v1/solver-network/multisig-collect-signature/:intentId

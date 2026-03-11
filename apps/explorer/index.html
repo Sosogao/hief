@@ -45,6 +45,12 @@
     .btn-erc4337 { background:linear-gradient(135deg,#0284c7,#0369a1); color:#fff; border:none; border-radius:8px; padding:10px 20px; font-size:13px; font-weight:700; cursor:pointer; width:100%; margin-top:10px; letter-spacing:0.02em; }
     .btn-erc4337:hover { opacity:0.9; }
     .btn-erc4337:disabled { opacity:0.5; cursor:not-allowed; }
+    /* Safe+Safe4337Module mode */
+    .mode-badge-safe4337 { display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:9999px;font-size:10px;font-weight:700;background:rgba(251,146,60,0.15);border:1px solid rgba(251,146,60,0.3);color:#fb923c; }
+    .safe4337-card { background:rgba(251,146,60,0.07); border:1px solid rgba(251,146,60,0.3); border-radius:12px; padding:14px 16px; margin:8px 0; }
+    .btn-safe4337 { background:linear-gradient(135deg,#ea580c,#c2410c); color:#fff; border:none; border-radius:8px; padding:10px 20px; font-size:13px; font-weight:700; cursor:pointer; width:100%; margin-top:10px; letter-spacing:0.02em; }
+    .btn-safe4337:hover { opacity:0.9; }
+    .btn-safe4337:disabled { opacity:0.5; cursor:not-allowed; }
     .sig-progress { display:flex;gap:6px;margin:8px 0; }
     .sig-dot { width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700; }
     .sig-dot.signed { background:rgba(124,58,237,0.4);border:2px solid #7c3aed;color:#c084fc; }
@@ -709,8 +715,9 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
   cardDiv.id = 'simCard-'+intentId;
   cardDiv.className = 'flex gap-3';
 
-  var isMultisig = accountInfo && accountInfo.mode === 'MULTISIG' && accountInfo.isSafe;
-  var isERC4337 = accountInfo && accountInfo.mode === 'ERC4337' && accountInfo.isERC4337;
+  var isMultisig  = accountInfo && accountInfo.mode === 'MULTISIG'     && accountInfo.isSafe;
+  var isERC4337   = accountInfo && accountInfo.mode === 'ERC4337'      && accountInfo.isERC4337;
+  var isSafe4337  = accountInfo && accountInfo.mode === 'ERC4337_SAFE' && accountInfo.isSafe4337;
   var threshold = (accountInfo && accountInfo.threshold) || 1;
   var owners = (accountInfo && accountInfo.owners) || [];
   var accountType = (accountInfo && accountInfo.accountType) || 'SmartAccount';
@@ -718,9 +725,10 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
 
   var avatar = document.createElement('div');
   avatar.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0';
-  if (isMultisig) { avatar.style.background = '#4c1d95'; avatar.textContent = '🔐'; }
-  else if (isERC4337) { avatar.style.background = '#0c4a6e'; avatar.textContent = '🤖'; }
-  else { avatar.style.background = '#78350f'; avatar.textContent = '🔬'; }
+  if (isMultisig)       { avatar.style.background = '#4c1d95'; avatar.textContent = '🔐'; }
+  else if (isSafe4337)  { avatar.style.background = '#7c2d12'; avatar.textContent = '🛡'; }
+  else if (isERC4337)   { avatar.style.background = '#0c4a6e'; avatar.textContent = '🤖'; }
+  else                  { avatar.style.background = '#78350f'; avatar.textContent = '🔬'; }
 
   var bubble = document.createElement('div');
   bubble.className = 'flex-1 max-w-lg';
@@ -728,14 +736,16 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
   // Mode badge
   var modeBadge = isMultisig
     ? '<span class="mode-badge-multisig">🔐 Multisig Mode (' + threshold + '-of-' + owners.length + ')</span>'
+    : isSafe4337
+    ? '<span class="mode-badge-safe4337">🛡 Safe+4337 Mode</span>'
     : isERC4337
     ? '<span class="mode-badge-erc4337">🤖 ERC-4337 Mode</span>'
     : '<span class="mode-badge-direct">⚡ Direct Mode</span>';
 
-  var cardClass = isMultisig ? 'multisig-card' : isERC4337 ? 'erc4337-card' : 'sim-card';
-  var titleColor = isMultisig ? '#a78bfa' : isERC4337 ? '#38bdf8' : '#f59e0b';
-  var titleIcon = isMultisig ? '🔐' : isERC4337 ? '🤖' : '🔬';
-  var titleText = isMultisig ? 'Multisig Pre-Settlement Simulation' : isERC4337 ? 'ERC-4337 Pre-Settlement Simulation' : 'Pre-Settlement Simulation';
+  var cardClass  = isMultisig ? 'multisig-card' : isSafe4337 ? 'safe4337-card' : isERC4337 ? 'erc4337-card' : 'sim-card';
+  var titleColor = isMultisig ? '#a78bfa' : isSafe4337 ? '#fb923c' : isERC4337 ? '#38bdf8' : '#f59e0b';
+  var titleIcon  = isMultisig ? '🔐' : isSafe4337 ? '🛡' : isERC4337 ? '🤖' : '🔬';
+  var titleText  = isMultisig ? 'Multisig Pre-Settlement Simulation' : isSafe4337 ? 'Safe+4337 Pre-Settlement Simulation' : isERC4337 ? 'ERC-4337 Pre-Settlement Simulation' : 'Pre-Settlement Simulation';
 
   var simHtml = '<div class="' + cardClass + '">';
   simHtml += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
@@ -778,8 +788,26 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
     simHtml += '<button class="btn-multisig" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', true)">';
     simHtml += '🔐 Propose Multisig Transaction';
     simHtml += '</button>';
+  } else if (isSafe4337) {
+    // Safe+Safe4337Module-specific info
+    simHtml += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(251,146,60,0.2);">'
+    simHtml += '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">Account Type: <strong style="color:#fb923c;">Safe + Safe4337Module</strong></div>';
+    simHtml += '<div style="font-size:10px;font-family:monospace;color:#64748b;margin-bottom:2px;">EntryPoint v0.7: 0x0000000071...da032</div>';
+    simHtml += '<div style="font-size:10px;font-family:monospace;color:#64748b;margin-bottom:4px;">Module: 0x75cf1146...c226</div>';
+    if (owners.length > 0) {
+      simHtml += '<div style="font-size:10px;color:#64748b;margin-top:4px;">Safe Owners (' + threshold + '-of-' + owners.length + '):</div>';
+      owners.slice(0,2).forEach(function(o, i) {
+        simHtml += '<div style="font-size:10px;font-family:monospace;color:#94a3b8;">' + (i+1) + '. ' + o.slice(0,10) + '...' + o.slice(-6) + '</div>';
+      });
+      if (owners.length > 2) simHtml += '<div style="font-size:10px;color:#64748b;">+' + (owners.length-2) + ' more</div>';
+    }
+    simHtml += '</div>';
+    simHtml += '<div style="margin-top:10px;font-size:11px;color:#94a3b8;">AI builds the UserOperation. You sign with MetaMask, then it executes via EntryPoint → Safe4337Module → Safe.</div>';
+    simHtml += '<button class="btn-safe4337" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false, false, true)">';
+    simHtml += '🛡 Prepare UserOp & Sign with MetaMask';
+    simHtml += '</button>';
   } else if (isERC4337) {
-    // ERC-4337-specific info
+    // ERC-4337-specific info (SimpleAccount / generic AA)
     simHtml += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(56,189,248,0.2);">'
     simHtml += '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">Account Type: <strong style="color:#38bdf8;">' + accountType + '</strong></div>';
     if (entryPoint) {
@@ -805,12 +833,18 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
   container.scrollTop = container.scrollHeight;
 }
 
-// executeSettlement: handles DIRECT, MULTISIG, and ERC-4337 modes
-async function executeSettlement(intentId, isMultisig, isERC4337) {
+// Store Safe4337 UserOp typed data keyed by intentId for MetaMask signing
+var safe4337Proposals = {};
+
+// executeSettlement: handles DIRECT, MULTISIG, ERC-4337, and ERC4337_SAFE modes
+async function executeSettlement(intentId, isMultisig, isERC4337, isSafe4337) {
   var btn = document.getElementById('btnExecute-'+intentId);
   if (isMultisig) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Proposing Safe transaction...'; }
     appendChatMessage('system', '🔐 Proposing Safe multisig transaction...');
+  } else if (isSafe4337) {
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Preparing UserOperation...'; }
+    appendChatMessage('system', '🛡 AI is building the Safe+4337 UserOperation...');
   } else if (isERC4337) {
     if (btn) { btn.disabled = true; btn.textContent = '⏳ Building UserOperation...'; }
     appendChatMessage('system', '🤖 Building ERC-4337 UserOperation and submitting via EntryPoint...');
@@ -829,10 +863,16 @@ async function executeSettlement(intentId, isMultisig, isERC4337) {
     if (execRes.ok && execJson.success) {
       var d = execJson.data;
       if (d.executionMode === 'MULTISIG' || d.status === 'PENDING_SIGNATURES') {
-        // ─── MULTISIG: Show pending signatures card ────────────────────────────────────────────────────
+        // ─── MULTISIG: Show pending signatures card ─────────────────────────────────────────────────
         if (btn) { btn.textContent = '🔐 Proposed!'; btn.style.background = '#2d1a4a'; }
         appendChatMessage('system', '🔐 Safe TX proposed! Waiting for co-signatures (' + d.threshold + ' required)...');
         showMultisigPendingCard(intentId, d);
+      } else if (d.executionMode === 'ERC4337_SAFE' || d.status === 'PENDING_USER_SIGNATURE') {
+        // ─── SAFE+4337: Show MetaMask UserOp signing card ───────────────────────────────────────────
+        safe4337Proposals[intentId] = d;
+        if (btn) { btn.textContent = '🦊 Sign UserOp with MetaMask'; btn.disabled = false; btn.className = 'btn-safe4337'; btn.onclick = function() { requestSafe4337Signature(intentId); }; }
+        appendChatMessage('system', '🛡 UserOp ready! UserOpHash: ' + d.userOpHash.slice(0,10) + '...' + d.userOpHash.slice(-8) + ' — Click to sign with MetaMask');
+        showSafe4337PendingCard(intentId, d);
       } else if (d.executionMode === 'ERC4337') {
         // ─── ERC-4337: Show UserOp hash and tx hash ────────────────────────────────────────────────────
         var userOpHash = d.userOpHash || '';
@@ -1002,6 +1042,122 @@ async function requestMetaMaskSignature(intentId) {
     }
   } catch(e) {
     if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign with MetaMask & Execute'; }
+    if (e.code === 4001) {
+      appendChatMessage('system', '⚠️ MetaMask: User rejected the signature request.');
+    } else {
+      appendChatMessage('system', '⚠️ Error: '+e.message);
+    }
+  }
+}
+
+// Show Safe+4337 pending card: displays UserOp hash and MetaMask sign button
+function showSafe4337PendingCard(intentId, proposalData) {
+  var container = document.getElementById('chatMessages');
+  var cardDiv = document.createElement('div');
+  cardDiv.id = 's4337Card-'+intentId;
+  cardDiv.className = 'flex gap-3';
+
+  var avatar = document.createElement('div');
+  avatar.className = 'w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0';
+  avatar.style.background = '#7c2d12';
+  avatar.textContent = '🛡';
+
+  var bubble = document.createElement('div');
+  bubble.className = 'flex-1 max-w-lg';
+
+  var userOpHash = proposalData.userOpHash || '';
+  var safeAddr = proposalData.safeAddress || '';
+  var shortUOH = userOpHash ? userOpHash.slice(0,10)+'...'+userOpHash.slice(-8) : 'N/A';
+  var shortSafe = safeAddr ? safeAddr.slice(0,10)+'...'+safeAddr.slice(-6) : 'N/A';
+
+  var html = '<div class="safe4337-card">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">';
+  html += '<div style="font-size:13px;font-weight:700;color:#fb923c;">🛡 Awaiting Your UserOp Signature</div>';
+  html += '<span class="mode-badge-safe4337">Safe+4337</span>';
+  html += '</div>';
+  html += '<div class="sim-row"><span class="sim-label">Status</span><span class="sim-value" style="color:#fb923c;">🛡 PENDING_USER_SIGNATURE</span></div>';
+  html += '<div class="sim-row"><span class="sim-label">UserOp Hash</span><span class="sim-value" style="font-size:10px;">' + shortUOH + '</span></div>';
+  html += '<div class="sim-row"><span class="sim-label">Safe Account</span><span class="sim-value" style="font-size:10px;">' + shortSafe + '</span></div>';
+  html += '<div class="sim-row"><span class="sim-label">EntryPoint</span><span class="sim-value" style="font-size:10px;">v0.7 (0x000000...da032)</span></div>';
+  html += '<div style="margin-top:10px;font-size:11px;color:#94a3b8;">Sign the UserOperation with your wallet to authorize execution via EntryPoint → Safe4337Module → Safe.</div>';
+  html += '<button class="btn-safe4337" id="btnS4337Confirm-'+intentId+'" onclick="requestSafe4337Signature(\''+intentId+'\')">';
+  html += '🦊 Sign UserOp with MetaMask & Execute';
+  html += '</button>';
+  html += '</div>';
+
+  bubble.innerHTML = html;
+  cardDiv.appendChild(avatar);
+  cardDiv.appendChild(bubble);
+  container.appendChild(cardDiv);
+  container.scrollTop = container.scrollHeight;
+}
+
+// Request EIP-712 UserOp signature from MetaMask for Safe+Safe4337Module
+async function requestSafe4337Signature(intentId) {
+  var btn = document.getElementById('btnS4337Confirm-'+intentId) || document.getElementById('btnExecute-'+intentId);
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Waiting for MetaMask...'; }
+
+  var proposalData = safe4337Proposals[intentId];
+  if (!proposalData || !proposalData.userOpTypedData) {
+    appendChatMessage('system', '⚠️ Missing UserOp EIP-712 typed data. Please retry.');
+    if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign UserOp with MetaMask & Execute'; }
+    return;
+  }
+
+  if (!window.ethereum) {
+    appendChatMessage('system', '⚠️ MetaMask not found. Please install MetaMask extension.');
+    if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign UserOp with MetaMask & Execute'; }
+    return;
+  }
+
+  try {
+    // Request account access
+    var accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    var signerAddress = accounts[0];
+    appendChatMessage('system', '🦊 MetaMask connected: ' + signerAddress.slice(0,10) + '...');
+
+    // Request EIP-712 UserOp signature (Safe4337Module uses EIP-712 domain)
+    appendChatMessage('system', '🛡 Requesting UserOp signature from MetaMask...');
+    var typedDataStr = JSON.stringify(proposalData.userOpTypedData);
+    var userSignature = await window.ethereum.request({
+      method: 'eth_signTypedData_v4',
+      params: [signerAddress, typedDataStr]
+    });
+
+    appendChatMessage('system', '✅ Signature received! Submitting to backend...');
+    if (btn) { btn.textContent = '⏳ Executing on-chain...'; }
+
+    // Submit signature to backend
+    var collectRes = await fetch(SOLVER_API+'/v1/solver-network/safe4337-collect-signature/'+intentId, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ userSignature, signerAddress })
+    });
+    var collectJson = await collectRes.json();
+
+    if (collectRes.ok && collectJson.success) {
+      var txHash = collectJson.data.txHash;
+      var blockNum = collectJson.data.blockNumber;
+      var userOpHash = collectJson.data.userOpHash || '';
+      var shortTx = txHash.slice(0,10)+'...'+txHash.slice(-8);
+      var shortUOH = userOpHash ? userOpHash.slice(0,10)+'...'+userOpHash.slice(-8) : '';
+      var tenderlyUrl = 'https://dashboard.tenderly.co/tx/'+txHash;
+      if (btn) { btn.textContent = '✅ Safe+4337 Executed!'; btn.style.background = '#431407'; }
+      appendChatMessage('system', '✅ Safe+4337 UserOp EXECUTED on-chain! Block #'+blockNum);
+      var container = document.getElementById('chatMessages');
+      var linkDiv = document.createElement('div');
+      linkDiv.className = 'flex gap-3';
+      linkDiv.innerHTML = '<div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0" style="background:#7c2d12;">🛡</div><div class="flex-1 max-w-lg"><div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-xs font-mono bg-orange-900/20"><div style="color:#fb923c;margin-bottom:4px;font-weight:700;">Safe+4337 UserOp Executed</div>'+(shortUOH?'<div style="color:#94a3b8;margin-bottom:2px;">UserOpHash: <span style="color:#fdba74;">'+shortUOH+'</span></div>':'')+'<div style="color:#94a3b8;">TX: <a href="'+tenderlyUrl+'" target="_blank" style="color:#fb923c;">'+shortTx+'</a></div></div></div>';
+      container.appendChild(linkDiv);
+      container.scrollTop = container.scrollHeight;
+      delete safe4337Proposals[intentId];
+      setTimeout(loadStats, 1500);
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = '🦊 Retry Sign & Execute'; }
+      appendChatMessage('system', '⚠️ Execution failed: '+(collectJson.error||JSON.stringify(collectJson)));
+    }
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign UserOp with MetaMask & Execute'; }
     if (e.code === 4001) {
       appendChatMessage('system', '⚠️ MetaMask: User rejected the signature request.');
     } else {
