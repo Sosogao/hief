@@ -326,9 +326,9 @@ export function wrapSafe4337Signature(ecdsaSignature: string): string {
  *
  * Safe4337Module v0.3.0 uses SafeOp EIP-712 domain:
  *   - chainId: <chain>
- *   - verifyingContract: <safeAddress>  (the Safe, NOT the module)
+ *   - verifyingContract: SAFE_4337_MODULE_V030  (the MODULE address, NOT the Safe)
  *
- * The type is SafeUserOperation which matches the SAFE_OP_TYPEHASH:
+ * The type is SafeOp which matches the SAFE_OP_TYPEHASH:
  *   keccak256("SafeOp(address safe,uint256 nonce,bytes initCode,bytes callData,
  *     uint128 verificationGasLimit,uint128 callGasLimit,uint256 preVerificationGas,
  *     uint128 maxPriorityFeePerGas,uint128 maxFeePerGas,bytes paymasterAndData,
@@ -356,10 +356,20 @@ export async function buildUserOpTypedData(
     actualChainId = Number(network.chainId);
   }
 
-  // Safe4337Module v0.3.0 domain: only chainId + verifyingContract (the Safe address)
+  // Safe4337Module v0.3.0 domain: only chainId + verifyingContract (the MODULE address)
+  //
+  // CRITICAL FIX: verifyingContract MUST be the Safe4337Module address, NOT the Safe address.
+  //
+  // Why: Safe4337Module.domainSeparator() uses address(this). When validateUserOp is called
+  // via the Safe's fallback handler (CALL, not DELEGATECALL), address(this) in the module
+  // equals the MODULE address. Therefore the EIP-712 domain separator uses MODULE as
+  // verifyingContract, and we must sign with the same MODULE address.
+  //
+  // Verified on Tenderly fork: signing with verifyingContract=MODULE + Safe owner key
+  // produces validateUserOp=0 (success) and handleOps succeeds with UserOperationEvent.success=true.
   const domain = {
     chainId: actualChainId,
-    verifyingContract: userOp.sender,  // The Safe address (not the module)
+    verifyingContract: SAFE_4337_MODULE_V030,  // MODULE address, not Safe address
   };
 
   // CRITICAL: The type name MUST be 'SafeOp' to match SAFE_OP_TYPEHASH in Safe4337Module v0.3.0:
@@ -487,11 +497,13 @@ export async function submitSafe4337UserOp(params: {
 
   if (userOpLog) {
     // Decode: UserOperationEvent(bytes32 userOpHash, address sender, address paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)
+    // UserOperationEvent v0.7: topics[1]=userOpHash, topics[2]=sender, topics[3]=paymaster
+    // data = abi.encode(nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)
     const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
-      ['address', 'address', 'uint256', 'bool', 'uint256', 'uint256'],
+      ['uint256', 'bool', 'uint256', 'uint256'],
       userOpLog.data
     );
-    const success = decoded[3] as boolean;
+    const success = decoded[1] as boolean;
     if (!success) {
       throw new Error(`UserOperation failed on-chain. UserOpHash: ${userOpHash}`);
     }

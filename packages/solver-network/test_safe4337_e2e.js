@@ -243,7 +243,8 @@ async function main() {
   console.log('\n[Step 7] Verifying intent status...');
   await sleep(1000);
   const statusResp = await get(`${BUS_URL}/v1/intents/${busIntentId}`);
-  const status = statusResp.data?.status || statusResp.status;
+  // Intent bus stores status in _status field (prefixed to avoid schema conflicts)
+  const status = statusResp._status || statusResp.data?._status || statusResp.data?.status || statusResp.status;
   console.log(`  Intent status: ${status}`);
 
   if (status === 'EXECUTED') {

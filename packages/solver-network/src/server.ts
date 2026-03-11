@@ -36,7 +36,7 @@ import {
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);
 const BUS_URL = process.env.BUS_URL || 'http://localhost:3001';
-const TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.base-sepolia.eu.rpc.tenderly.co/d8ee495e-1c03-4236-9615-b4a03b52069f';
+const TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d';
 const SETTLEMENT_CHAIN_ID = parseInt(process.env.SETTLEMENT_CHAIN_ID || '99917', 10);
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '15000', 10);
 
@@ -268,13 +268,14 @@ async function generateQuote(
 }
 
 // ─── Settlement Engine ───────────────────────────────────────────────────────
-// Tenderly Virtual Testnet config (Base Sepolia fork, chainId 99917)
+// Tenderly Virtual Testnet config (Ethereum Mainnet fork, chainId 99917)
 const TENDERLY_RPC = process.env.TENDERLY_RPC_URL ||
-  'https://virtual.base-sepolia.eu.rpc.tenderly.co/d8ee495e-1c03-4236-9615-b4a03b52069f';
+  'https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d';
 const SETTLEMENT_PRIVATE_KEY = process.env.SETTLEMENT_PRIVATE_KEY ||
   '0xf2be7fd8f35f99b3838c9dc7e1bdbeccaefb9031ebd223a18c1a8e54f5bb780d';
-const WETH_ADDRESS = '0x4200000000000000000000000000000000000006';
-const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
+// Ethereum Mainnet token addresses (used on Tenderly mainnet fork)
+const WETH_ADDRESS = process.env.WETH_ADDRESS || '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2'; // Mainnet WETH
+const USDC_ADDRESS = process.env.USDC_ADDRESS || '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'; // Mainnet USDC
 const BURN_ADDRESS = '0x000000000000000000000000000000000000dEaD';
 const WETH_ABI = [
   'function deposit() payable',
@@ -705,6 +706,15 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
             // Build UserOperation, compute hash, prepare typed data for MetaMask
             try {
               console.log(`[Safe4337] Building UserOp for ${intentId.slice(0, 16)}... | Safe: ${accountInfo.address.slice(0, 10)}...`);
+
+              // Auto-fund Safe on Tenderly fork if needed (dev/test only)
+              const safeProvider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+              const safeBalance = await safeProvider.getBalance(accountInfo.address);
+              if (safeBalance < ethers.parseEther('0.01')) {
+                console.log(`[Safe4337] Safe has ${ethers.formatEther(safeBalance)} ETH — auto-funding 1 ETH via Tenderly setBalance`);
+                await safeProvider.send('tenderly_setBalance', [[accountInfo.address], '0xDE0B6B3A7640000']); // 1 ETH
+              }
+
               const wethInterface = new ethers.Interface(['function deposit() payable']);
               const depositData = wethInterface.encodeFunctionData('deposit', []);
               const userOp = await buildSafe4337UserOperation({
