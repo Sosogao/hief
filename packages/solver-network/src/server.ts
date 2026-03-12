@@ -36,9 +36,12 @@ import {
 // ─── Config ────────────────────────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT || '3008', 10);
 const BUS_URL = process.env.BUS_URL || 'http://localhost:3001';
-const TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d';
-const SETTLEMENT_CHAIN_ID = parseInt(process.env.SETTLEMENT_CHAIN_ID || '99917', 10);
+// TENDERLY_RPC_URL is mutable at runtime via POST /v1/solver-network/config
+let TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d';
+let SETTLEMENT_CHAIN_ID = parseInt(process.env.SETTLEMENT_CHAIN_ID || '99917', 10);
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '15000', 10);
+// Set ENABLE_TENDERLY_AUTOFUND=true to allow auto-funding Safe accounts on Tenderly forks (dev/test only)
+const ENABLE_TENDERLY_AUTOFUND = process.env.ENABLE_TENDERLY_AUTOFUND === 'true';
 
 // Load .env
 const envPath = path.resolve(__dirname, '../../../.env');
@@ -268,9 +271,8 @@ async function generateQuote(
 }
 
 // ─── Settlement Engine ───────────────────────────────────────────────────────
-// Tenderly Virtual Testnet config (Ethereum Mainnet fork, chainId 99917)
-const TENDERLY_RPC = process.env.TENDERLY_RPC_URL ||
-  'https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d';
+// TENDERLY_RPC is an alias for TENDERLY_RPC_URL (kept for backward compat with simulateSettlement)
+// Note: use TENDERLY_RPC_URL (the let variable) for all new code so runtime updates take effect
 const SETTLEMENT_PRIVATE_KEY = process.env.SETTLEMENT_PRIVATE_KEY ||
   '0xf2be7fd8f35f99b3838c9dc7e1bdbeccaefb9031ebd223a18c1a8e54f5bb780d';
 // Ethereum Mainnet token addresses (used on Tenderly mainnet fork)
@@ -340,7 +342,7 @@ async function simulateSettlement(
     id: 1,
   };
 
-  const simRes = await fetch(TENDERLY_RPC, {
+  const simRes = await fetch(TENDERLY_RPC_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(simPayload),
@@ -424,7 +426,7 @@ async function settleOnChain(
   intent: any,
   winner: any
 ): Promise<{ txHash: string; blockNumber: number }> {
-  const provider = new ethers.JsonRpcProvider(TENDERLY_RPC);
+  const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
   const wallet = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY, provider);
 
   const inputToken = (intent.input?.token || '').toLowerCase();
@@ -708,11 +710,14 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
               console.log(`[Safe4337] Building UserOp for ${intentId.slice(0, 16)}... | Safe: ${accountInfo.address.slice(0, 10)}...`);
 
               // Auto-fund Safe on Tenderly fork if needed (dev/test only)
-              const safeProvider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
-              const safeBalance = await safeProvider.getBalance(accountInfo.address);
-              if (safeBalance < ethers.parseEther('0.01')) {
-                console.log(`[Safe4337] Safe has ${ethers.formatEther(safeBalance)} ETH — auto-funding 1 ETH via Tenderly setBalance`);
-                await safeProvider.send('tenderly_setBalance', [[accountInfo.address], '0xDE0B6B3A7640000']); // 1 ETH
+              // Only runs when ENABLE_TENDERLY_AUTOFUND=true is set in environment
+              if (ENABLE_TENDERLY_AUTOFUND) {
+                const safeProvider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+                const safeBalance = await safeProvider.getBalance(accountInfo.address);
+                if (safeBalance < ethers.parseEther('0.01')) {
+                  console.log(`[Safe4337] Safe has ${ethers.formatEther(safeBalance)} ETH — auto-funding 1 ETH via tenderly_setBalance (ENABLE_TENDERLY_AUTOFUND=true)`);
+                  await safeProvider.send('tenderly_setBalance', [[accountInfo.address], '0xDE0B6B3A7640000']); // 1 ETH
+                }
               }
 
               const wethInterface = new ethers.Interface(['function deposit() payable']);
@@ -1415,9 +1420,142 @@ app.post('/v1/solver-network/multisig-collect-signature/:intentId', async (req: 
   }
 });
 
-// ─── Start ───────────────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`[SolverNetwork] Service started on port ${PORT}`);
+// ─── Config API ──────────────────────────────────────────────────────────────────────────────────────
+
+// GET /v1/solver-network/config — return current runtime configuration
+app.get('/v1/solver-network/config', (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    data: {
+      tenderlyRpcUrl: TENDERLY_RPC_URL,
+      settlementChainId: SETTLEMENT_CHAIN_ID,
+      enableTenderlyAutofund: ENABLE_TENDERLY_AUTOFUND,
+      busUrl: BUS_URL,
+      port: PORT,
+      wethAddress: WETH_ADDRESS,
+      usdcAddress: USDC_ADDRESS,
+      entryPointV07: ENTRY_POINT_V07,
+      safe4337Module: SAFE_4337_MODULE_V030,
+    },
+  });
+});
+
+// POST /v1/solver-network/config — update mutable runtime configuration
+app.post('/v1/solver-network/config', (req: Request, res: Response) => {
+  const { tenderlyRpcUrl, settlementChainId } = req.body;
+  const updated: Record<string, unknown> = {};
+  if (tenderlyRpcUrl && typeof tenderlyRpcUrl === 'string' && tenderlyRpcUrl.startsWith('http')) {
+    TENDERLY_RPC_URL = tenderlyRpcUrl;
+    updated.tenderlyRpcUrl = TENDERLY_RPC_URL;
+    console.log(`[Config] TENDERLY_RPC_URL updated to: ${TENDERLY_RPC_URL}`);
+  }
+  if (settlementChainId && typeof settlementChainId === 'number') {
+    SETTLEMENT_CHAIN_ID = settlementChainId;
+    updated.settlementChainId = SETTLEMENT_CHAIN_ID;
+    console.log(`[Config] SETTLEMENT_CHAIN_ID updated to: ${SETTLEMENT_CHAIN_ID}`);
+  }
+  res.json({ success: true, data: { updated, current: { tenderlyRpcUrl: TENDERLY_RPC_URL, settlementChainId: SETTLEMENT_CHAIN_ID } } });
+});
+
+// ─── Test Wallets API ──────────────────────────────────────────────────────────────────────────────────────
+
+// Pre-configured test accounts for the three execution modes.
+// These are Tenderly fork accounts funded with test ETH — DO NOT use on mainnet.
+const TEST_WALLETS = [
+  {
+    type: 'EOA',
+    label: 'EOA Test Wallet',
+    description: 'Plain externally-owned account. Executes intents via direct on-chain settlement.',
+    address: '0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a',
+    executionMode: 'DIRECT',
+    icon: '👤',
+    color: '#4ade80',
+    note: 'No smart contract. AI signs and broadcasts directly.',
+  },
+  {
+    type: 'SAFE_MULTISIG',
+    label: 'Safe Multisig Wallet',
+    description: 'Gnosis Safe with 1-of-2 multisig threshold. Intents require co-signer approval before execution.',
+    address: '0xbdB26a0a4DCAdcd16b5B3b0F55f0A85D79280aD1',
+    executionMode: 'MULTISIG',
+    icon: '🔐',
+    color: '#a78bfa',
+    owners: [
+      '0xb5eb16b6dF444c07309fd5f5635BA21Ef30F8cA2',
+      '0x7d73932636FbC0E57448BA175AbCd800C60daE5F',
+    ],
+    threshold: 1,
+    note: 'AI proposes Safe TX. Co-signer must approve via MetaMask.',
+  },
+  {
+    type: 'SAFE_4337',
+    label: 'Safe + ERC-4337 Wallet',
+    description: 'Gnosis Safe with Safe4337Module enabled. Intents are executed as ERC-4337 UserOperations via EntryPoint v0.7.',
+    address: '0xafde956738f3d610ae93cd4f4d74b029a9d39ebf',
+    executionMode: 'ERC4337_SAFE',
+    icon: '🛡',
+    color: '#fb923c',
+    owners: [
+      '0xb5eb16b6dF444c07309fd5f5635BA21Ef30F8cA2',
+      '0x7d73932636FbC0E57448BA175AbCd800C60daE5F',
+    ],
+    threshold: 1,
+    module: SAFE_4337_MODULE_V030,
+    entryPoint: ENTRY_POINT_V07,
+    note: 'AI builds UserOp. User signs with MetaMask. EntryPoint → Safe4337Module → Safe.',
+  },
+];
+
+// GET /v1/solver-network/test-wallets — return pre-configured test wallet info
+app.get('/v1/solver-network/test-wallets', async (_req: Request, res: Response) => {
+  try {
+    const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+    const walletsWithBalance = await Promise.all(
+      TEST_WALLETS.map(async (w) => {
+        try {
+          const balance = await provider.getBalance(w.address);
+          return { ...w, ethBalance: ethers.formatEther(balance) };
+        } catch {
+          return { ...w, ethBalance: 'N/A' };
+        }
+      })
+    );
+    res.json({ success: true, data: walletsWithBalance });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /v1/solver-network/fund-test-wallet — fund a test wallet via tenderly_setBalance (ENABLE_TENDERLY_AUTOFUND only)
+app.post('/v1/solver-network/fund-test-wallet', async (req: Request, res: Response) => {
+  if (!ENABLE_TENDERLY_AUTOFUND) {
+    res.status(403).json({ success: false, error: 'ENABLE_TENDERLY_AUTOFUND is not enabled. Set ENABLE_TENDERLY_AUTOFUND=true to allow test funding.' });
+    return;
+  }
+  const { address, amountEth } = req.body;
+  if (!address || !ethers.isAddress(address)) {
+    res.status(400).json({ success: false, error: 'Invalid address' });
+    return;
+  }
+  const amount = parseFloat(amountEth || '1');
+  if (isNaN(amount) || amount <= 0 || amount > 100) {
+    res.status(400).json({ success: false, error: 'amountEth must be between 0 and 100' });
+    return;
+  }
+  try {
+    const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+    const hexAmount = '0x' + ethers.parseEther(amount.toString()).toString(16);
+    await provider.send('tenderly_setBalance', [[address], hexAmount]);
+    const newBalance = await provider.getBalance(address);
+    console.log(`[TestFund] Funded ${address} with ${amount} ETH via tenderly_setBalance`);
+    res.json({ success: true, data: { address, amountEth: amount, newBalance: ethers.formatEther(newBalance) } });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ─── Start ──────────────────────────────────────────────────────────────────────────────────────
+app.listen(PORT, () => { console.log(`[SolverNetwork] Service started on port ${PORT}`);
   console.log(`[SolverNetwork] ${SOLVER_PERSONAS.length} solvers registered: ${SOLVER_PERSONAS.map(s => s.name).join(', ')}`);
   console.log(`[SolverNetwork] Polling Intent Bus at ${BUS_URL} every ${POLL_INTERVAL_MS}ms`);
 

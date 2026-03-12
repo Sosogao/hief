@@ -68,6 +68,24 @@
     .dot-live { width:8px; height:8px; border-radius:50%; background:#4ade80; animation:pulse-dot 2s infinite; display:inline-block; }
     @keyframes pulse-dot { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:0.5;transform:scale(0.8)} }
     ::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
+    /* Test Wallet Cards */
+    .wallet-card { border-radius:14px; padding:16px; cursor:pointer; transition:all 0.2s; border:2px solid transparent; }
+    .wallet-card:hover { transform:translateY(-2px); }
+    .wallet-card.selected { border-color: var(--wc-color); }
+    .wallet-card-eoa { background:rgba(74,222,128,0.06); border-color:rgba(74,222,128,0.2); }
+    .wallet-card-eoa:hover { background:rgba(74,222,128,0.1); border-color:rgba(74,222,128,0.4); }
+    .wallet-card-multisig { background:rgba(167,139,250,0.06); border-color:rgba(167,139,250,0.2); }
+    .wallet-card-multisig:hover { background:rgba(167,139,250,0.1); border-color:rgba(167,139,250,0.4); }
+    .wallet-card-safe4337 { background:rgba(251,146,60,0.06); border-color:rgba(251,146,60,0.2); }
+    .wallet-card-safe4337:hover { background:rgba(251,146,60,0.1); border-color:rgba(251,146,60,0.4); }
+    /* Fork Config Panel */
+    .fork-config-panel { background:rgba(99,102,241,0.06); border:1px solid rgba(99,102,241,0.2); border-radius:12px; padding:12px 16px; }
+    .fork-url-input { background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:8px; padding:6px 10px; color:#e2e8f0; font-family:monospace; font-size:11px; width:100%; }
+    .fork-url-input:focus { outline:none; border-color:rgba(99,102,241,0.5); }
+    .btn-fork-save { background:rgba(99,102,241,0.3); border:1px solid rgba(99,102,241,0.5); color:#a5b4fc; border-radius:6px; padding:5px 12px; font-size:11px; cursor:pointer; }
+    .btn-fork-save:hover { background:rgba(99,102,241,0.5); }
+    .btn-fork-fund { background:rgba(74,222,128,0.15); border:1px solid rgba(74,222,128,0.3); color:#4ade80; border-radius:6px; padding:5px 12px; font-size:11px; cursor:pointer; }
+    .btn-fork-fund:hover { background:rgba(74,222,128,0.25); }
   </style>
 </head>
 <body class="min-h-screen">
@@ -81,9 +99,37 @@
   <div class="flex items-center gap-3">
     <span class="dot-live"></span>
     <span class="text-xs text-slate-400">Live</span>
-    <span class="text-xs px-2 py-1 rounded-full bg-violet-900/50 text-violet-400 border border-violet-700/50">Tenderly Testnet (99917)</span>
+    <button onclick="toggleForkPanel()" title="Click to configure Tenderly fork" class="text-xs px-2 py-1 rounded-full bg-violet-900/50 text-violet-400 border border-violet-700/50 hover:bg-violet-800/60 hover:text-violet-300 transition-colors cursor-pointer">
+      <span id="headerChainLabel">Tenderly Fork (<span id="headerChainId">99917</span>)</span> <span class="opacity-60">&#9881;</span>
+    </button>
   </div>
 </header>
+
+<!-- Tenderly Fork Config Panel (hidden by default) -->
+<div id="forkConfigPanel" class="hidden border-b border-indigo-500/20 px-6 py-3" style="background:rgba(99,102,241,0.04)">
+  <div class="max-w-4xl mx-auto">
+    <div class="flex flex-wrap gap-3 items-end">
+      <div class="flex-1 min-w-0">
+        <div class="text-xs text-slate-400 mb-1 font-medium">&#127374; Tenderly Fork RPC URL</div>
+        <input id="forkRpcInput" type="text" class="fork-url-input" placeholder="https://virtual.mainnet.eu.rpc.tenderly.co/..." />
+      </div>
+      <div class="w-28">
+        <div class="text-xs text-slate-400 mb-1 font-medium">Chain ID</div>
+        <input id="forkChainIdInput" type="number" class="fork-url-input" placeholder="99917" />
+      </div>
+      <div class="flex gap-2">
+        <button onclick="saveForkConfig()" class="btn-fork-save">&#10003; Apply</button>
+        <button onclick="toggleForkPanel()" class="btn-fork-save" style="background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.1);color:#64748b">Cancel</button>
+      </div>
+    </div>
+    <div id="forkConfigStatus" class="text-xs mt-2 text-slate-500"></div>
+    <div class="mt-2 flex flex-wrap gap-3">
+      <span class="text-xs text-slate-500">Quick presets:</span>
+      <button onclick="setForkPreset('https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d', 99917)" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Mainnet Fork (99917)</button>
+      <button onclick="setForkPreset('https://virtual.base.rpc.tenderly.co/...', 84532)" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Base Fork (84532)</button>
+    </div>
+  </div>
+</div>
 
 <div class="border-b border-white/5 px-6 py-3 grid grid-cols-2 md:grid-cols-5 gap-4">
   <div class="text-center"><div class="text-xs text-slate-500 mb-1">Total Intents</div><div class="text-lg font-bold text-white skeleton h-6 rounded" id="statTotalIntents">-</div></div>
@@ -111,9 +157,26 @@
         <button onclick="lookupAddress()" class="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl font-medium text-sm">Search</button>
       </div>
       <div class="flex gap-2 mt-3">
-        <span class="text-xs text-slate-500">Try:</span>
-        <button onclick="setExample('0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Test Wallet</button>
+        <span class="text-xs text-slate-500">Quick lookup:</span>
+        <button onclick="setExample('0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">EOA</button>
+        <button onclick="setExample('0xbdB26a0a4DCAdcd16b5B3b0F55f0A85D79280aD1')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Safe Multisig</button>
+        <button onclick="setExample('0xafde956738f3d610ae93cd4f4d74b029a9d39ebf')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Safe+4337</button>
       </div>
+    </div>
+
+    <!-- Test Wallets Section -->
+    <div class="mb-8">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-slate-300">&#127981; Test Wallets <span class="text-xs text-slate-500 font-normal ml-2">Pre-configured accounts for each execution mode</span></h2>
+        <button onclick="loadTestWallets()" class="text-xs text-slate-500 hover:text-slate-300">&#8635; Refresh</button>
+      </div>
+      <div id="testWalletsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <!-- Skeleton loading state -->
+        <div class="wallet-card wallet-card-eoa skeleton" style="height:160px"></div>
+        <div class="wallet-card wallet-card-multisig skeleton" style="height:160px"></div>
+        <div class="wallet-card wallet-card-safe4337 skeleton" style="height:160px"></div>
+      </div>
+      <div id="testWalletFundStatus" class="text-xs text-center mt-2 text-slate-500 hidden"></div>
     </div>
     <div id="results" class="hidden">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -1240,6 +1303,176 @@ setInterval(loadStats, 30000);
 setInterval(function() {
   if(!document.getElementById('panel-activity').classList.contains('hidden')) loadActivity();
 }, 10000);
+
+// ─── Tenderly Fork Config ─────────────────────────────────────────────────────
+var _forkPanelOpen = false;
+var _currentForkUrl = '';
+var _currentChainId = 99917;
+
+function toggleForkPanel() {
+  _forkPanelOpen = !_forkPanelOpen;
+  var panel = document.getElementById('forkConfigPanel');
+  panel.classList.toggle('hidden', !_forkPanelOpen);
+  if (_forkPanelOpen) {
+    document.getElementById('forkRpcInput').value = _currentForkUrl;
+    document.getElementById('forkChainIdInput').value = _currentChainId;
+    document.getElementById('forkConfigStatus').textContent = '';
+  }
+}
+
+function setForkPreset(url, chainId) {
+  document.getElementById('forkRpcInput').value = url;
+  document.getElementById('forkChainIdInput').value = chainId;
+}
+
+async function saveForkConfig() {
+  var url = document.getElementById('forkRpcInput').value.trim();
+  var chainId = parseInt(document.getElementById('forkChainIdInput').value.trim(), 10);
+  var statusEl = document.getElementById('forkConfigStatus');
+  if (!url || !url.startsWith('http')) { statusEl.textContent = '❌ Invalid RPC URL'; statusEl.style.color='#f87171'; return; }
+  if (!chainId || isNaN(chainId)) { statusEl.textContent = '❌ Invalid Chain ID'; statusEl.style.color='#f87171'; return; }
+  statusEl.textContent = '⏳ Applying...'; statusEl.style.color='#94a3b8';
+  try {
+    var res = await fetch(SOLVER_API+'/v1/solver-network/config', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ tenderlyRpcUrl: url, settlementChainId: chainId })
+    });
+    var json = await res.json();
+    if (json.success) {
+      _currentForkUrl = json.data.current.tenderlyRpcUrl;
+      _currentChainId = json.data.current.settlementChainId;
+      document.getElementById('headerChainId').textContent = _currentChainId;
+      document.getElementById('statChainId').textContent = _currentChainId;
+      statusEl.textContent = '✅ Applied! Fork URL and Chain ID updated.';
+      statusEl.style.color='#4ade80';
+      setTimeout(function() { toggleForkPanel(); loadTestWallets(); }, 1200);
+    } else {
+      statusEl.textContent = '❌ ' + (json.error || 'Failed to update config');
+      statusEl.style.color='#f87171';
+    }
+  } catch(e) {
+    statusEl.textContent = '❌ Network error: ' + e.message;
+    statusEl.style.color='#f87171';
+  }
+}
+
+async function loadConfig() {
+  try {
+    var res = await fetch(SOLVER_API+'/v1/solver-network/config');
+    var json = await res.json();
+    if (json.success) {
+      _currentForkUrl = json.data.tenderlyRpcUrl;
+      _currentChainId = json.data.settlementChainId;
+      document.getElementById('headerChainId').textContent = _currentChainId;
+      document.getElementById('statChainId').textContent = _currentChainId;
+      // Store autofund capability
+      window._autofundEnabled = json.data.enableTenderlyAutofund;
+    }
+  } catch(e) {}
+}
+
+// ─── Test Wallets ─────────────────────────────────────────────────────────────
+var _testWallets = [];
+
+async function loadTestWallets() {
+  var grid = document.getElementById('testWalletsGrid');
+  try {
+    var res = await fetch(SOLVER_API+'/v1/solver-network/test-wallets');
+    var json = await res.json();
+    if (!json.success) return;
+    _testWallets = json.data;
+    renderTestWallets(_testWallets);
+  } catch(e) {
+    grid.innerHTML = '<div class="text-xs text-slate-500 col-span-3 text-center py-4">Failed to load test wallets</div>';
+  }
+}
+
+function renderTestWallets(wallets) {
+  var grid = document.getElementById('testWalletsGrid');
+  var cardClasses = { 'EOA': 'wallet-card-eoa', 'SAFE_MULTISIG': 'wallet-card-multisig', 'SAFE_4337': 'wallet-card-safe4337' };
+  var modeColors = { 'EOA': '#4ade80', 'SAFE_MULTISIG': '#a78bfa', 'SAFE_4337': '#fb923c' };
+  var modeBadges = {
+    'EOA':          '<span class="mode-badge-direct">&#128100; Direct</span>',
+    'SAFE_MULTISIG':'<span class="mode-badge-multisig">&#128272; Multisig</span>',
+    'SAFE_4337':    '<span class="mode-badge-safe4337">&#128737; Safe+4337</span>',
+  };
+  grid.innerHTML = wallets.map(function(w) {
+    var cc = cardClasses[w.type] || 'wallet-card-eoa';
+    var color = modeColors[w.type] || '#4ade80';
+    var badge = modeBadges[w.type] || '';
+    var shortAddr = w.address.slice(0,10)+'...'+w.address.slice(-6);
+    var balHtml = w.ethBalance && w.ethBalance !== 'N/A'
+      ? '<span style="color:'+color+'">'+parseFloat(w.ethBalance).toFixed(4)+' ETH</span>'
+      : '<span style="color:#64748b">N/A</span>';
+    var ownersHtml = '';
+    if (w.owners && w.owners.length) {
+      ownersHtml = '<div style="font-size:10px;color:#64748b;margin-top:4px;">Owners: '+w.owners.map(function(o){return o.slice(0,8)+'...'}).join(', ')+'</div>';
+    }
+    var fundBtn = window._autofundEnabled
+      ? '<button onclick="fundTestWallet(event,\''+w.address+'\')" class="btn-fork-fund" style="font-size:10px;padding:3px 8px;margin-top:6px;">&#128176; Fund 1 ETH</button>'
+      : '';
+    return '<div class="wallet-card '+cc+'" style="--wc-color:'+color+'" onclick="selectTestWallet(\''+w.address+'\',\''+w.type+'\')">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">'
+      +'<div style="font-size:22px;">'+w.icon+'</div>'
+      +badge
+      +'</div>'
+      +'<div style="font-size:13px;font-weight:700;color:#f1f5f9;margin-bottom:2px;">'+w.label+'</div>'
+      +'<div style="font-family:monospace;font-size:10px;color:#64748b;margin-bottom:6px;">'+shortAddr+'</div>'
+      +'<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">'+w.description+'</div>'
+      +ownersHtml
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">'
+      +'<div style="font-size:11px;">Balance: '+balHtml+'</div>'
+      +fundBtn
+      +'</div>'
+      +'</div>';
+  }).join('');
+}
+
+function selectTestWallet(address, type) {
+  // Set the address in the search input and lookup
+  document.getElementById('addressInput').value = address;
+  // Also set in the AI chat wallet input
+  var chatWalletInput = document.getElementById('chatWallet');
+  if (chatWalletInput) chatWalletInput.value = address;
+  // Highlight selected card
+  document.querySelectorAll('.wallet-card').forEach(function(c) { c.classList.remove('selected'); });
+  event && event.currentTarget && event.currentTarget.classList.add('selected');
+  // Scroll to search and trigger lookup
+  document.getElementById('addressInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  lookupAddress();
+}
+
+async function fundTestWallet(e, address) {
+  e.stopPropagation();
+  var statusEl = document.getElementById('testWalletFundStatus');
+  statusEl.classList.remove('hidden');
+  statusEl.textContent = '⏳ Funding ' + address.slice(0,10) + '...';
+  statusEl.style.color = '#94a3b8';
+  try {
+    var res = await fetch(SOLVER_API+'/v1/solver-network/fund-test-wallet', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ address: address, amountEth: 1 })
+    });
+    var json = await res.json();
+    if (json.success) {
+      statusEl.textContent = '✅ Funded! New balance: ' + parseFloat(json.data.newBalance).toFixed(4) + ' ETH';
+      statusEl.style.color = '#4ade80';
+      setTimeout(function() { loadTestWallets(); statusEl.classList.add('hidden'); }, 2000);
+    } else {
+      statusEl.textContent = '❌ ' + (json.error || 'Fund failed');
+      statusEl.style.color = '#f87171';
+    }
+  } catch(err) {
+    statusEl.textContent = '❌ Network error: ' + err.message;
+    statusEl.style.color = '#f87171';
+  }
+}
+
+// Initialize config and test wallets on page load
+loadConfig();
+loadTestWallets();
 </script>
 </body>
 </html>
