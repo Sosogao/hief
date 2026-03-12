@@ -431,7 +431,7 @@ async function lookupAddress() {
       document.getElementById('dimensionScores').innerHTML = '<p class="text-xs text-slate-500">No reputation data yet.</p>';
     }
     renderAddressIntents(data.intents ? data.intents.recent : []);
-  } catch(err) { showError('Explorer API unavailable on port 3006.'); console.error(err); }
+  } catch(err) { showError('Search failed: ' + (err.message || 'Explorer API unavailable. Check that all services are running.')); console.error(err); }
 }
 
 function renderAddressIntents(intents) {

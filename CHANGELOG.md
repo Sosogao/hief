@@ -153,3 +153,24 @@ not `userOp.sender` (the Safe address).
 | `USDC_ADDRESS` | mainnet USDC | Override token address |
 | `BUS_URL` | `http://localhost:3001` | Intent Bus URL |
 | `PORT` | `3008` | Solver Network port |
+
+## [0.0.4] - 2026-03-12
+
+### Bug Fixes
+
+#### Explorer API "unavailable on port 3006" Error
+- **Root cause**: The error message in `lookupAddress()` catch block was hardcoded as "Explorer API unavailable on port 3006." regardless of the actual error. The real cause was typically a JavaScript runtime error (e.g., `createScoreRing` or `createRadar` failing) rather than the API being down.
+- **Fix**: Changed the catch block to display the actual error message: `showError('Search failed: ' + err.message)`.
+
+#### Solver Auction Hangs at "Running solver auction & pre-settlement simulation..."
+- **Root cause**: The trigger endpoint (`POST /v1/solver-network/trigger`) fetched intent details exclusively from the explorer-api (`localhost:3006`). In some cases, the intent was not yet indexed in the explorer-api's SQLite DB when the trigger was called (race condition between bus write and explorer-api read). This caused a 404 response and the trigger returned an error, but the frontend showed no feedback.
+- **Fix**: Added a **bus fallback** in both the trigger endpoint and the poll loop. If explorer-api returns 404, the server now fetches the intent directly from the bus (`BUS_URL/v1/intents/:id`). This eliminates the race condition.
+
+#### Test Wallet Cards Appearing Empty
+- **Root cause**: The solver-network server was not restarted after adding the `/test-wallets` endpoint, so the old server (without the endpoint) was still running. The `loadTestWallets()` function silently failed and left the skeleton divs visible.
+- **Fix**: Restarted the server with the updated compiled code. The `/test-wallets` endpoint now returns all three wallets with live ETH balances.
+
+### Verified Working
+- Trigger endpoint: returns full auction result in ~5s ✅
+- Test wallets endpoint: returns 3 wallets with balances ✅
+- Error messages: now show actual error instead of hardcoded "port 3006" ✅

@@ -865,14 +865,22 @@ async function pollAndAuction() {
       processedIntents.add(intentRow.id);
       totalAuctions++;
 
-      // Get full intent details
+      // Get full intent details (explorer-api first, bus fallback)
       try {
+        let intent: any = {};
+        let intentHash = '';
         const detailRes = await fetch(`http://localhost:3006/v1/explorer/intents/${intentRow.id}`);
-        if (!detailRes.ok) continue;
-        const detail = await detailRes.json() as any;
-        const intentData = detail.data;
-        const intent = intentData?.intent || {};
-        const intentHash = intentData?.intentHash || '';
+        if (detailRes.ok) {
+          const detail = await detailRes.json() as any;
+          const intentData = detail.data;
+          intent = intentData?.intent || {};
+          intentHash = intentData?.intentHash || '';
+        } else {
+          const busRes = await fetch(`${BUS_URL}/v1/intents/${intentRow.id}`);
+          if (!busRes.ok) continue;
+          intent = await busRes.json() as any;
+          intentHash = intent.intentHash || '';
+        }
         const result = await runAuction(intentRow.id, intentHash, intent);
         if (result.submittedSolutionId) totalWins++;
 
@@ -975,15 +983,26 @@ app.post('/v1/solver-network/trigger', async (req: Request, res: Response) => {
   }
 
   try {
+    // Try explorer-api first; fall back to bus directly if not indexed yet
+    let intent: any = {};
+    let intentHash = '';
     const detailRes = await fetch(`http://localhost:3006/v1/explorer/intents/${intentId}`);
-    if (!detailRes.ok) {
-      res.status(404).json({ success: false, error: 'Intent not found' });
-      return;
+    if (detailRes.ok) {
+      const detail = await detailRes.json() as any;
+      const intentData = detail.data;
+      intent = intentData?.intent || {};
+      intentHash = intentData?.intentHash || '';
+    } else {
+      // Fallback: fetch directly from the bus
+      const busRes = await fetch(`${BUS_URL}/v1/intents/${intentId}`);
+      if (!busRes.ok) {
+        res.status(404).json({ success: false, error: `Intent ${intentId} not found in explorer or bus` });
+        return;
+      }
+      intent = await busRes.json() as any;
+      // Compute intentHash from bus response (bus stores it)
+      intentHash = intent.intentHash || '';
     }
-    const detail = await detailRes.json() as any;
-    const intentData = detail.data;
-    const intent = intentData?.intent || {};
-    const intentHash = intentData?.intentHash || '';
 
     // Remove from processed set to allow re-auction
     processedIntents.delete(intentId);
