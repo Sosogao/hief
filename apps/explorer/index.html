@@ -745,57 +745,66 @@ async function confirmChatIntent() {
           appendChatMessage('system', '🔍 Running solver auction & pre-settlement simulation...');
 
           // Trigger solver network auction (now returns simulation, not settlement)
-          setTimeout(async function() {
-            try {
-              var triggerController = new AbortController();
-              var triggerTimeout = setTimeout(function() { triggerController.abort(); }, 30000);
-              var solverRes = await fetch(SOLVER_API+'/v1/solver-network/trigger', {
-                method: 'POST',
-                headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ intentId: intentId }),
-                signal: triggerController.signal
-              });
-              clearTimeout(triggerTimeout);
-              var solverJson = await solverRes.json();
-              if (solverJson.success && solverJson.data) {
-                var d = solverJson.data;
-                var w = d.winner;
-                if (w) {
-                  appendChatMessage('system', '🏆 Auction complete! Winner: '+w.solverName+' | Net: $'+w.netOutUSD.toFixed(4)+' | Route: '+w.route);
-                } else {
-                  appendChatMessage('system', '⚠️ Auction complete but no valid quotes found. Check that the RPC fork is reachable.');
-                }
-                // Show simulation result card with confirm button (mode-aware)
-                var accountInfo = d.accountInfo || null;
-                var execMode = d.executionMode || 'DIRECT';
-                if (execMode === 'MULTISIG') {
-                  appendChatMessage('system', '🔐 Multisig account detected (threshold: ' + (accountInfo && accountInfo.threshold) + '). Simulation complete.');
-                } else if (execMode === 'ERC4337') {
-                  appendChatMessage('system', '🤖 ERC-4337 Smart Account detected (type: ' + (accountInfo && accountInfo.accountType || 'SmartAccount') + '). Simulation complete.');
-                } else {
-                  appendChatMessage('system', '⚡ Direct execution mode detected.');
-                }
-                if (d.simulation) {
-                  showSimulationCard(intentId, d.simulation, w, accountInfo);
-                } else {
-                  // Fallback: no simulation available
-                  appendChatMessage('system', '⚠️ Simulation unavailable. Use the Execute button to proceed.');
-                  showSimulationCard(intentId, null, w, accountInfo);
-                }
-                setTimeout(loadStats, 1000);
-              } else {
-                // Trigger returned error — show it so the user knows what happened
-                var errMsg = solverJson.error || (solverRes.status === 503 ? 'Solver service is still starting up' : 'Auction failed');
-                appendChatMessage('system', '⚠️ Solver auction error: ' + errMsg + '. You can retry by submitting a new intent.');
+          setTimeout(function() {
+            async function runTrigger(attempt) {
+              if (attempt > 0) {
+                appendChatMessage('system', '⏳ Solver service starting, retrying... (' + attempt + '/3)');
+                await new Promise(function(r){ setTimeout(r, 5000); });
               }
-            } catch(e) {
-              if (e.name === 'AbortError') {
-                appendChatMessage('system', '⚠️ Solver auction timed out (30s). The RPC fork may be unreachable. Check your Tenderly fork URL.');
-              } else {
-                appendChatMessage('system', '⚠️ Solver error: '+e.message);
+              try {
+                var triggerController = new AbortController();
+                var triggerTimeout = setTimeout(function() { triggerController.abort(); }, 30000);
+                var solverRes = await fetch(SOLVER_API+'/v1/solver-network/trigger', {
+                  method: 'POST',
+                  headers: {'Content-Type':'application/json'},
+                  body: JSON.stringify({ intentId: intentId }),
+                  signal: triggerController.signal
+                });
+                clearTimeout(triggerTimeout);
+                if (solverRes.status === 503 && attempt < 3) {
+                  return runTrigger(attempt + 1);
+                }
+                var solverJson = await solverRes.json();
+                if (solverJson.success && solverJson.data) {
+                  var d = solverJson.data;
+                  var w = d.winner;
+                  if (w) {
+                    appendChatMessage('system', '🏆 Auction complete! Winner: '+w.solverName+' | Net: $'+w.netOutUSD.toFixed(4)+' | Route: '+w.route);
+                  } else {
+                    appendChatMessage('system', '⚠️ Auction complete but no valid quotes found. Check that the RPC fork is reachable.');
+                  }
+                  // Show simulation result card with confirm button (mode-aware)
+                  var accountInfo = d.accountInfo || null;
+                  var execMode = d.executionMode || 'DIRECT';
+                  if (execMode === 'MULTISIG') {
+                    appendChatMessage('system', '🔐 Multisig account detected (threshold: ' + (accountInfo && accountInfo.threshold) + '). Simulation complete.');
+                  } else if (execMode === 'ERC4337') {
+                    appendChatMessage('system', '🤖 ERC-4337 Smart Account detected (type: ' + (accountInfo && accountInfo.accountType || 'SmartAccount') + '). Simulation complete.');
+                  } else {
+                    appendChatMessage('system', '⚡ Direct execution mode detected.');
+                  }
+                  if (d.simulation) {
+                    showSimulationCard(intentId, d.simulation, w, accountInfo);
+                  } else {
+                    // Fallback: no simulation available
+                    appendChatMessage('system', '⚠️ Simulation unavailable. Use the Execute button to proceed.');
+                    showSimulationCard(intentId, null, w, accountInfo);
+                  }
+                  setTimeout(loadStats, 1000);
+                } else {
+                  var errMsg = solverJson.error || (solverRes.status === 503 ? 'Solver service still starting. Please try again in ~10s.' : 'Auction failed');
+                  appendChatMessage('system', '⚠️ Solver auction error: ' + errMsg);
+                }
+              } catch(e) {
+                if (e.name === 'AbortError') {
+                  appendChatMessage('system', '⚠️ Solver auction timed out (30s). The RPC fork may be unreachable. Check your Tenderly fork URL.');
+                } else {
+                  appendChatMessage('system', '⚠️ Solver error: '+e.message);
+                }
+                console.error('Solver trigger error:', e);
               }
-              console.error('Solver trigger error:', e);
             }
+            runTrigger(0);
           }, 1500);
           chatPendingIntent = null;
           setTimeout(loadStats, 2000);

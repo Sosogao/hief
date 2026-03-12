@@ -358,6 +358,7 @@ async function main() {
     waitForService(SERVICES.find(s => s.name === 'reputation'), 90000),
     waitForService(SERVICES.find(s => s.name === 'agent'), 120000),
     waitForService(SERVICES.find(s => s.name === 'explorer-api'), 90000),
+    waitForService(SERVICES.find(s => s.name === 'solver-network'), 120000),
   ]);
 
   // Start gateway

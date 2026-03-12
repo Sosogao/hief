@@ -216,3 +216,23 @@ Two independent root causes:
 | `apps/explorer/index.html` | `historyChartContainer` id + `createHistory` canvas lifecycle fix (Bug 3) |
 | `packages/solver-network/src/server.ts` | `simulateSettlement`: `AbortSignal.timeout(8000)` on Tenderly fetch (Bug 2) |
 | `packages/solver-network/src/server.ts` | `runAuction`: `Promise.race` 6 s timeout on `detectAccountMode` (Bug 2) |
+
+---
+
+## [0.0.6] - 2026-03-12
+
+### Fixed — Solver Auction "Service starting up" on Railway Deployment
+
+**Root cause**: `gateway.js` did not include `solver-network` in the `waitForService` list. On Railway (single-service deployment), the gateway started accepting traffic before `solver-network` (port 3008) was ready, causing every `/v1/solver-network/trigger` call to return `503 ECONNREFUSED` immediately after deploy.
+
+**Fixes:**
+
+- **`gateway.js`**: Added `solver-network` to `waitForService` with a 120 s timeout. Railway's healthcheck will now only pass (and traffic will only be routed) once all services including solver-network are ready.
+- **`apps/explorer/index.html`** (trigger fetch): Wrapped the trigger call in a `runTrigger(attempt)` retry function. On `503`, automatically retries up to 3 times with 5 s delay each, showing `⏳ Solver service starting, retrying... (N/3)`.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `gateway.js` | Add `solver-network` to `waitForService` list (120 s timeout) |
+| `apps/explorer/index.html` | Trigger fetch: `runTrigger(attempt)` retry on 503, up to 3× with 5 s delay |
