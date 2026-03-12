@@ -177,6 +177,34 @@
         <div class="wallet-card wallet-card-safe4337 skeleton" style="height:160px"></div>
       </div>
       <div id="testWalletFundStatus" class="text-xs text-center mt-2 text-slate-500 hidden"></div>
+      <!-- Create Smart Wallet row -->
+      <div class="mt-4 flex items-center gap-3 flex-wrap">
+        <span class="text-xs text-slate-500">Don't have a smart wallet on this fork?</span>
+        <button onclick="showCreateWalletPanel()" class="text-xs px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors">+ Create Smart Wallet</button>
+      </div>
+      <!-- Create Wallet Panel (hidden by default) -->
+      <div id="createWalletPanel" class="hidden mt-4 p-4 rounded-xl glass border border-slate-700">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm font-semibold text-slate-200">Create Smart Wallet on Fork</span>
+          <button onclick="hideCreateWalletPanel()" class="text-slate-500 hover:text-slate-300 text-xs">✕ Close</button>
+        </div>
+        <p class="text-xs text-slate-400 mb-4">Connect MetaMask and deploy a new Safe contract on the current Tenderly fork. The AI key will co-own the wallet and pay gas.</p>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="wallet-card wallet-card-multisig p-4 rounded-xl cursor-pointer hover:opacity-90" onclick="createSmartWallet('multisig')">
+            <div class="text-lg mb-1">🔐</div>
+            <div class="text-sm font-bold text-slate-100 mb-1">Safe Multisig</div>
+            <div class="text-xs text-slate-400">2-of-2 Safe. Owners: you + AI key. Threshold: 2. Both must co-sign transactions.</div>
+            <div class="text-xs text-purple-400 mt-2 font-medium">→ MULTISIG mode</div>
+          </div>
+          <div class="wallet-card wallet-card-safe4337 p-4 rounded-xl cursor-pointer hover:opacity-90" onclick="createSmartWallet('safe4337')">
+            <div class="text-lg mb-1">🛡</div>
+            <div class="text-sm font-bold text-slate-100 mb-1">Safe + ERC-4337</div>
+            <div class="text-xs text-slate-400">Safe with Safe4337Module enabled. Owner: you only. Signs UserOps via MetaMask.</div>
+            <div class="text-xs text-orange-400 mt-2 font-medium">→ ERC4337_SAFE mode</div>
+          </div>
+        </div>
+        <div id="createWalletStatus" class="text-xs mt-3 text-slate-400 hidden"></div>
+      </div>
     </div>
     <div id="results" class="hidden">
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
@@ -1528,6 +1556,63 @@ async function fundTestWallet(e, address) {
     statusEl.textContent = '❌ Network error: ' + err.message;
     statusEl.style.color = '#f87171';
   }
+}
+
+// ─── Create Smart Wallet ───────────────────────────────────────────────────────
+
+function showCreateWalletPanel() {
+  document.getElementById('createWalletPanel').classList.remove('hidden');
+}
+
+function hideCreateWalletPanel() {
+  document.getElementById('createWalletPanel').classList.add('hidden');
+  document.getElementById('createWalletStatus').classList.add('hidden');
+}
+
+async function createSmartWallet(walletType) {
+  var statusEl = document.getElementById('createWalletStatus');
+  statusEl.classList.remove('hidden');
+  statusEl.style.color = '#94a3b8';
+
+  // Connect MetaMask to get owner address
+  if (!window.ethereum) {
+    statusEl.textContent = '❌ MetaMask not found. Install MetaMask to continue.';
+    statusEl.style.color = '#f87171';
+    return;
+  }
+  try {
+    var accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    var ownerAddress = accounts[0];
+    statusEl.textContent = '⏳ Deploying ' + (walletType === 'multisig' ? 'Safe Multisig' : 'Safe+ERC-4337') + ' for ' + ownerAddress.slice(0, 10) + '... (may take ~10s)';
+
+    var res = await fetch(SOLVER_API+'/v1/solver-network/create-smart-wallet', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ ownerAddress: ownerAddress, walletType: walletType })
+    });
+    var json = await res.json();
+    if (json.success) {
+      var d = json.data;
+      statusEl.style.color = '#4ade80';
+      statusEl.innerHTML = '✅ Created! <span style="font-family:monospace;font-size:11px;">' + d.safeAddress + '</span>'
+        + ' — <button onclick="useCreatedWallet(\'' + d.safeAddress + '\')" style="color:#60a5fa;text-decoration:underline;background:none;border:none;cursor:pointer;">Use this wallet</button>';
+    } else {
+      statusEl.textContent = '❌ ' + (json.error || 'Deployment failed');
+      statusEl.style.color = '#f87171';
+    }
+  } catch(err) {
+    statusEl.textContent = '❌ ' + err.message;
+    statusEl.style.color = '#f87171';
+  }
+}
+
+function useCreatedWallet(address) {
+  document.getElementById('addressInput').value = address;
+  var chatWalletInput = document.getElementById('chatWallet');
+  if (chatWalletInput) chatWalletInput.value = address;
+  hideCreateWalletPanel();
+  document.getElementById('addressInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  lookupAddress();
 }
 
 // Initialize config and test wallets on page load

@@ -260,3 +260,38 @@ A secondary issue: `import initSqlJs from 'sql.js'` was present in `server.ts` b
 | `packages/solver-network/dist/erc4337.js` | Add missing compiled output |
 | `packages/solver-network/dist/safe4337.js` | Add missing compiled output |
 | `packages/solver-network/dist/server.js` | Update compiled output (includes all recent fixes) |
+
+---
+
+## [0.0.8] - 2026-03-12
+
+### Fixed — MetaMask "Invalid findTypeDependencies input undefined" When Signing UserOp
+
+**Root cause**: `buildUserOpTypedData()` in `safe4337.ts` returned `{ domain, types, message }` but was missing two fields required by MetaMask's `eth_signTypedData_v4`:
+1. `primaryType` — MetaMask calls `findTypeDependencies(primaryType, types)` internally; with `primaryType` undefined this throws immediately
+2. `EIP712Domain` in `types` — required by MetaMask v11+ to explicitly list the domain type
+
+**Fix**: Added `primaryType: 'SafeOp'` and `EIP712Domain: [{ chainId, verifyingContract }]` to the return value of `buildUserOpTypedData()`. Also updated `signUserOpWithAI()` to strip `EIP712Domain` before passing types to ethers.js `signTypedData` (which handles domain internally).
+
+### Added — Create Smart Wallet Flow
+
+Users can now deploy a fresh Safe contract on the current Tenderly fork directly from the Explorer UI. This is useful when test wallet addresses don't exist on a given fork.
+
+**Server**: `POST /v1/solver-network/create-smart-wallet`
+- `{ ownerAddress, walletType: "multisig" | "safe4337" }`
+- `multisig`: deploys 2-of-2 Safe (owners: user + AI key, threshold: 2) → MULTISIG mode
+- `safe4337`: deploys Safe with Safe4337Module enabled (owner: user only, threshold: 1) → ERC4337_SAFE mode
+- Auto-funds the new Safe with 1 ETH via `tenderly_setBalance`
+
+**safe4337.ts**: Added `deployNewSafeMultisig()` for 2-of-2 Safe deployment (complements existing `deployNewSafe4337Account()`)
+
+**Frontend** (`apps/explorer/index.html`): Added "Create Smart Wallet" panel below the Test Wallets grid. Connects MetaMask, calls the server endpoint, shows the new address with a "Use this wallet" button that auto-fills the search.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `packages/solver-network/src/safe4337.ts` | `buildUserOpTypedData`: add `primaryType`, `EIP712Domain`; `signUserOpWithAI`: strip `EIP712Domain` before ethers.js call |
+| `packages/solver-network/src/safe4337.ts` | Add `deployNewSafeMultisig()` function |
+| `packages/solver-network/src/server.ts` | Add `POST /v1/solver-network/create-smart-wallet` endpoint |
+| `apps/explorer/index.html` | Create Smart Wallet panel + `createSmartWallet()`, `useCreatedWallet()` functions |

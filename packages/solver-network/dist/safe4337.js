@@ -11,6 +11,7 @@ exports.signUserOpWithAI = signUserOpWithAI;
 exports.submitSafe4337UserOp = submitSafe4337UserOp;
 exports.executeSafe4337WithSignature = executeSafe4337WithSignature;
 exports.deployNewSafe4337Account = deployNewSafe4337Account;
+exports.deployNewSafeMultisig = deployNewSafeMultisig;
 /**
  * safe4337.ts
  * ──────────────────────────────────────────────────────────────────────────────
@@ -295,7 +296,12 @@ async function buildUserOpTypedData(userOp, userOpHash, chainId, rpcUrl // Optio
     //   uint128 callGasLimit,uint256 preVerificationGas,uint128 maxPriorityFeePerGas,uint128 maxFeePerGas,
     //   bytes paymasterAndData,uint48 validAfter,uint48 validUntil,address entryPoint)")
     // = 0xc03dfc11d8b10bf9cf703d558958c8c42777f785d998c62060d85a4f0ef6ea7f
+    // MetaMask v11+ requires EIP712Domain to be explicitly listed in types
     const types = {
+        EIP712Domain: [
+            { name: 'chainId', type: 'uint256' },
+            { name: 'verifyingContract', type: 'address' },
+        ],
         SafeOp: [
             { name: 'safe', type: 'address' },
             { name: 'nonce', type: 'uint256' },
@@ -335,7 +341,7 @@ async function buildUserOpTypedData(userOp, userOpHash, chainId, rpcUrl // Optio
         validUntil: '0',
         entryPoint: exports.ENTRY_POINT_V07,
     };
-    return { domain, types, message };
+    return { domain, types, message, primaryType: 'SafeOp' };
 }
 // ─── Sign UserOp (server-side, AI key) ───────────────────────────────────────
 /**
@@ -347,8 +353,11 @@ async function signUserOpWithAI(userOp, chainId, aiPrivateKey, rpcUrl // Optiona
 ) {
     const aiWallet = new ethers_1.ethers.Wallet(aiPrivateKey);
     const { domain, types, message } = await buildUserOpTypedData(userOp, '', chainId, rpcUrl);
+    // ethers.js handles the domain separator itself — strip EIP712Domain from types
+    const typesForSigning = { ...types };
+    delete typesForSigning.EIP712Domain;
     // Sign using EIP-712 — produces 65-byte ECDSA signature
-    const ecdsaSignature = await aiWallet.signTypedData(domain, types, message);
+    const ecdsaSignature = await aiWallet.signTypedData(domain, typesForSigning, message);
     // Safe4337Module requires: abi.encodePacked(validAfter(6), validUntil(6), ecdsaSignature)
     return wrapSafe4337Signature(ecdsaSignature);
 }
@@ -466,4 +475,40 @@ async function deployNewSafe4337Account(params) {
         throw new Error('ProxyCreation event not found');
     const safeAddress = ethers_1.ethers.AbiCoder.defaultAbiCoder().decode(['address'], log.topics[1])[0];
     return safeAddress;
+}
+// ─── Deploy new plain Safe Multisig ──────────────────────────────────────────
+/**
+ * Deploy a new Safe proxy as a 2-of-2 multisig.
+ * Owners: [userAddress, deployerAddress (AI key)]
+ * Threshold: 2 — both must co-sign transactions.
+ */
+async function deployNewSafeMultisig(params) {
+    const { userAddress, saltNonce, rpcUrl, deployerKey } = params;
+    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
+    const deployer = new ethers_1.ethers.Wallet(deployerKey, provider);
+    const SAFE_PROXY_FACTORY_ABI_DEPLOY = [
+        'function createProxyWithNonce(address _singleton, bytes memory initializer, uint256 saltNonce) external returns (address proxy)',
+    ];
+    const SAFE_SETUP_ABI = [
+        'function setup(address[] calldata _owners, uint256 _threshold, address to, bytes calldata data, address fallbackHandler, address paymentToken, uint256 payment, address payable paymentReceiver) external',
+    ];
+    const safeIface = new ethers_1.ethers.Interface(SAFE_SETUP_ABI);
+    const setupData = safeIface.encodeFunctionData('setup', [
+        [userAddress, deployer.address], // 2 owners: user + AI
+        2, // threshold = 2 (both must sign)
+        ethers_1.ethers.ZeroAddress,
+        '0x',
+        ethers_1.ethers.ZeroAddress, // no fallback handler for plain Safe
+        ethers_1.ethers.ZeroAddress,
+        0,
+        ethers_1.ethers.ZeroAddress,
+    ]);
+    const factory = new ethers_1.ethers.Contract(exports.SAFE_PROXY_FACTORY_V141, SAFE_PROXY_FACTORY_ABI_DEPLOY, deployer);
+    const tx = await factory.createProxyWithNonce(exports.SAFE_L2_V141, setupData, saltNonce, { gasLimit: 500_000 });
+    const receipt = await tx.wait();
+    const proxyCreationTopic = ethers_1.ethers.id('ProxyCreation(address,address)');
+    const log = receipt.logs.find((l) => l.topics[0] === proxyCreationTopic);
+    if (!log)
+        throw new Error('ProxyCreation event not found');
+    return ethers_1.ethers.AbiCoder.defaultAbiCoder().decode(['address'], log.topics[1])[0];
 }

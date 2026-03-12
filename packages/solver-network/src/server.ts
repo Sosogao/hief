@@ -28,6 +28,7 @@ import { executeERC4337, getOrCreateSimpleAccount, ENTRY_POINT_V06, type ERC4337
 import {
   buildSafe4337UserOperation, computeUserOpHash, buildUserOpTypedData,
   executeSafe4337WithSignature, getSafe4337AccountInfo,
+  deployNewSafe4337Account, deployNewSafeMultisig,
   SAFE_4337_MODULE_V030, ENTRY_POINT_V07,
   type PackedUserOperation, type Safe4337ExecutionResult,
 } from './safe4337';
@@ -1572,6 +1573,61 @@ app.post('/v1/solver-network/fund-test-wallet', async (req: Request, res: Respon
     console.log(`[TestFund] Funded ${address} with ${amount} ETH via tenderly_setBalance`);
     res.json({ success: true, data: { address, amountEth: amount, newBalance: ethers.formatEther(newBalance) } });
   } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST /v1/solver-network/create-smart-wallet — deploy a new Safe on the current Tenderly fork
+app.post('/v1/solver-network/create-smart-wallet', async (req: Request, res: Response) => {
+  const { ownerAddress, walletType } = req.body as { ownerAddress: string; walletType: 'multisig' | 'safe4337' };
+  if (!ownerAddress || !ethers.isAddress(ownerAddress)) {
+    res.status(400).json({ success: false, error: 'Invalid ownerAddress' });
+    return;
+  }
+  if (walletType !== 'multisig' && walletType !== 'safe4337') {
+    res.status(400).json({ success: false, error: 'walletType must be "multisig" or "safe4337"' });
+    return;
+  }
+  try {
+    const saltNonce = BigInt(Date.now());
+    let safeAddress: string;
+    let owners: string[];
+    let threshold: number;
+    const aiWallet = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY);
+
+    if (walletType === 'safe4337') {
+      safeAddress = await deployNewSafe4337Account({
+        owners: [ownerAddress],
+        threshold: 1,
+        saltNonce,
+        rpcUrl: TENDERLY_RPC_URL,
+        deployerKey: SETTLEMENT_PRIVATE_KEY,
+      });
+      owners = [ownerAddress];
+      threshold = 1;
+      console.log(`[CreateWallet] Deployed Safe4337 for ${ownerAddress.slice(0, 10)}... → ${safeAddress}`);
+    } else {
+      safeAddress = await deployNewSafeMultisig({
+        userAddress: ownerAddress,
+        saltNonce,
+        rpcUrl: TENDERLY_RPC_URL,
+        deployerKey: SETTLEMENT_PRIVATE_KEY,
+      });
+      owners = [ownerAddress, aiWallet.address];
+      threshold = 2;
+      console.log(`[CreateWallet] Deployed Safe Multisig for ${ownerAddress.slice(0, 10)}... → ${safeAddress}`);
+    }
+
+    // Auto-fund the new Safe with ETH for gas
+    try {
+      const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+      const hexAmount = '0x' + ethers.parseEther('1').toString(16);
+      await provider.send('tenderly_setBalance', [[safeAddress], hexAmount]);
+    } catch { /* Non-critical — fork might not support setBalance */ }
+
+    res.json({ success: true, data: { safeAddress, walletType, owners, threshold } });
+  } catch (err: any) {
+    console.error('[CreateWallet] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
