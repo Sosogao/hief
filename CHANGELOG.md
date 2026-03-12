@@ -236,3 +236,27 @@ Two independent root causes:
 |------|--------|
 | `gateway.js` | Add `solver-network` to `waitForService` list (120 s timeout) |
 | `apps/explorer/index.html` | Trigger fetch: `runTrigger(attempt)` retry on 503, up to 3× with 5 s delay |
+
+---
+
+## [0.0.7] - 2026-03-12
+
+### Fixed — solver-network Crashes on Railway (Missing Compiled Files)
+
+**Root cause**: `packages/solver-network/dist/` was committed to git but only contained `safeMultisig.js` and `server.js`. The `erc4337.js` and `safe4337.js` compiled outputs were missing. When Railway ran `node dist/server.js`, Node.js threw `Cannot find module './erc4337'` immediately on startup, causing the process to exit before it could listen on port 3008. This explains why all solver-network requests returned 503 ECONNREFUSED even after gateway waited 120 s.
+
+A secondary issue: `import initSqlJs from 'sql.js'` was present in `server.ts` but `initSqlJs` was never called. This dead import caused `tsc` to fail with a type error, preventing `dist/` from being regenerated locally.
+
+**Fixes:**
+- Removed unused `import initSqlJs from 'sql.js'` from `server.ts`
+- Re-ran `npx tsc` — compilation now succeeds cleanly
+- Committed all 4 compiled files: `erc4337.js`, `safe4337.js`, `safeMultisig.js`, `server.js`
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `packages/solver-network/src/server.ts` | Remove unused `import initSqlJs from 'sql.js'` |
+| `packages/solver-network/dist/erc4337.js` | Add missing compiled output |
+| `packages/solver-network/dist/safe4337.js` | Add missing compiled output |
+| `packages/solver-network/dist/server.js` | Update compiled output (includes all recent fixes) |

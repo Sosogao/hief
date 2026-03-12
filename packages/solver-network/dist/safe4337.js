@@ -1,0 +1,469 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.SAFE_PROXY_FACTORY_V141 = exports.SAFE_L2_V141 = exports.ENTRY_POINT_V07 = exports.SAFE_MODULE_SETUP_V030 = exports.SAFE_4337_MODULE_V030 = void 0;
+exports.getSafe4337AccountInfo = getSafe4337AccountInfo;
+exports.isSafe4337Account = isSafe4337Account;
+exports.buildSafe4337UserOperation = buildSafe4337UserOperation;
+exports.computeUserOpHash = computeUserOpHash;
+exports.wrapSafe4337Signature = wrapSafe4337Signature;
+exports.buildUserOpTypedData = buildUserOpTypedData;
+exports.signUserOpWithAI = signUserOpWithAI;
+exports.submitSafe4337UserOp = submitSafe4337UserOp;
+exports.executeSafe4337WithSignature = executeSafe4337WithSignature;
+exports.deployNewSafe4337Account = deployNewSafe4337Account;
+/**
+ * safe4337.ts
+ * ──────────────────────────────────────────────────────────────────────────────
+ * Safe + Safe4337Module ERC-4337 execution layer for HIEF Solver Network.
+ *
+ * Architecture (per HIEF_AI钱包执行层开发文档_基于Safe4337_v0.1):
+ *   - Safe account acts as the smart wallet (asset control layer)
+ *   - Safe4337Module (v0.3.0) acts as both ERC-4337 module AND fallback handler
+ *   - UserOperation is constructed by AI, signed by user via MetaMask
+ *   - EntryPoint v0.7 validates and executes the UserOp
+ *
+ * Flow:
+ *   1. AI builds UserOperation with Safe.execTransaction() as callData
+ *   2. AI computes UserOp hash (EIP-4337 domain-separated)
+ *   3. User signs UserOp hash via MetaMask (eth_signTypedData_v4)
+ *   4. AI submits via EntryPoint.handleOps() → Safe4337Module.validateUserOp()
+ *      → Safe.execTransaction() → settlement
+ *
+ * Key contracts (same address on all chains via CREATE2):
+ *   Safe4337Module v0.3.0:  0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226
+ *   SafeModuleSetup v0.3.0: 0x2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47
+ *   EntryPoint v0.7:        0x0000000071727De22E5E9d8BAf0edAc6f37da032
+ *
+ * EntryPoint v0.7 uses "packed" UserOperation format (different from v0.6).
+ */
+const ethers_1 = require("ethers");
+// ─── Constants ────────────────────────────────────────────────────────────────
+exports.SAFE_4337_MODULE_V030 = '0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226';
+exports.SAFE_MODULE_SETUP_V030 = '0x2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47';
+exports.ENTRY_POINT_V07 = '0x0000000071727De22E5E9d8BAf0edAc6f37da032';
+exports.SAFE_L2_V141 = '0x29fcB43b46531BcA003ddC8FCB67FFE91900C762';
+exports.SAFE_PROXY_FACTORY_V141 = '0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67';
+// EntryPoint v0.7 uses PackedUserOperation
+const ENTRY_POINT_V07_ABI = [
+    // handleOps with PackedUserOperation
+    `function handleOps(
+    tuple(
+      address sender,
+      uint256 nonce,
+      bytes initCode,
+      bytes callData,
+      bytes32 accountGasLimits,
+      uint256 preVerificationGas,
+      bytes32 gasFees,
+      bytes paymasterAndData,
+      bytes signature
+    )[] ops,
+    address payable beneficiary
+  ) external`,
+    // getUserOpHash with PackedUserOperation
+    `function getUserOpHash(
+    tuple(
+      address sender,
+      uint256 nonce,
+      bytes initCode,
+      bytes callData,
+      bytes32 accountGasLimits,
+      uint256 preVerificationGas,
+      bytes32 gasFees,
+      bytes paymasterAndData,
+      bytes signature
+    ) userOp
+  ) external view returns (bytes32)`,
+    'function getNonce(address sender, uint192 key) external view returns (uint256 nonce)',
+    'function balanceOf(address account) external view returns (uint256)',
+    'function depositTo(address account) external payable',
+];
+const SAFE_ABI = [
+    'function isModuleEnabled(address module) external view returns (bool)',
+    'function getOwners() external view returns (address[])',
+    'function getThreshold() external view returns (uint256)',
+    'function nonce() external view returns (uint256)',
+    // execTransaction — called as the inner call inside UserOp
+    `function execTransaction(
+    address to,
+    uint256 value,
+    bytes calldata data,
+    uint8 operation,
+    uint256 safeTxGas,
+    uint256 baseGas,
+    uint256 gasPrice,
+    address gasToken,
+    address payable refundReceiver,
+    bytes memory signatures
+  ) payable returns (bool success)`,
+];
+const SAFE_4337_MODULE_ABI = [
+    'function SUPPORTED_ENTRYPOINT() external view returns (address)',
+    'function domainSeparator() external view returns (bytes32)',
+    // executeUserOp — alternative to execTransaction for ERC-4337 path
+    'function executeUserOp(address to, uint256 value, bytes calldata data, uint8 operation) external',
+    'function executeUserOpWithErrorString(address to, uint256 value, bytes calldata data, uint8 operation) external',
+];
+// ─── Helper: pack gas limits into bytes32 ────────────────────────────────────
+function packGasLimits(verificationGasLimit, callGasLimit) {
+    // bytes32 = verificationGasLimit (16 bytes, upper) + callGasLimit (16 bytes, lower)
+    const packed = (verificationGasLimit << 128n) | callGasLimit;
+    return ethers_1.ethers.zeroPadValue(ethers_1.ethers.toBeHex(packed), 32);
+}
+function packGasFees(maxPriorityFeePerGas, maxFeePerGas) {
+    // bytes32 = maxPriorityFeePerGas (16 bytes, upper) + maxFeePerGas (16 bytes, lower)
+    const packed = (maxPriorityFeePerGas << 128n) | maxFeePerGas;
+    return ethers_1.ethers.zeroPadValue(ethers_1.ethers.toBeHex(packed), 32);
+}
+// ─── Safe4337AccountInfo ──────────────────────────────────────────────────────
+/**
+ * Query all relevant state for a Safe4337 account.
+ */
+async function getSafe4337AccountInfo(safeAddress, rpcUrl) {
+    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
+    const safe = new ethers_1.ethers.Contract(safeAddress, SAFE_ABI, provider);
+    const ep = new ethers_1.ethers.Contract(exports.ENTRY_POINT_V07, ENTRY_POINT_V07_ABI, provider);
+    const [owners, threshold, safeNonce, entryPointNonce, moduleEnabled, deposit] = await Promise.all([
+        safe.getOwners(),
+        safe.getThreshold(),
+        safe.nonce(),
+        ep.getNonce(safeAddress, 0),
+        safe.isModuleEnabled(exports.SAFE_4337_MODULE_V030),
+        ep.balanceOf(safeAddress),
+    ]);
+    return {
+        safeAddress,
+        owners: owners,
+        threshold: Number(threshold),
+        safeNonce,
+        entryPointNonce,
+        entryPoint: exports.ENTRY_POINT_V07,
+        moduleEnabled,
+        deposit,
+    };
+}
+// ─── Detect if a Safe has Safe4337Module enabled ──────────────────────────────
+/**
+ * Check if a Safe address has Safe4337Module enabled as both module and fallback handler.
+ * This is the detection function used by detectAccountMode() in safeMultisig.ts.
+ */
+async function isSafe4337Account(address, rpcUrl) {
+    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
+    try {
+        const safe = new ethers_1.ethers.Contract(address, SAFE_ABI, provider);
+        const isEnabled = await safe.isModuleEnabled(exports.SAFE_4337_MODULE_V030);
+        if (!isEnabled)
+            return false;
+        // Also verify fallback handler is Safe4337Module
+        const FALLBACK_HANDLER_SLOT = '0x6c9a6c4a39284e37ed1cf53d337577d14212a4870fb976a4366c693b939918d5';
+        const raw = await provider.getStorage(address, FALLBACK_HANDLER_SLOT);
+        const fallbackHandler = '0x' + raw.slice(26).toLowerCase();
+        return fallbackHandler === exports.SAFE_4337_MODULE_V030.toLowerCase();
+    }
+    catch {
+        return false;
+    }
+}
+// ─── Build UserOperation ──────────────────────────────────────────────────────
+/**
+ * Build a PackedUserOperation for Safe4337Module (EntryPoint v0.7).
+ *
+ * The callData is Safe4337Module.executeUserOp(to, value, data, operation)
+ * which is called via the fallback handler mechanism.
+ *
+ * Note: We use executeUserOp() instead of Safe.execTransaction() because:
+ *   - Safe4337Module intercepts calls to the Safe via the fallback handler
+ *   - executeUserOp() is the ERC-4337 native execution path
+ *   - It avoids the need for a separate Safe signature inside the UserOp
+ */
+async function buildSafe4337UserOperation(params) {
+    const { safeAddress, to, rpcUrl } = params;
+    const value = BigInt(params.value ?? 0);
+    const data = params.data || '0x';
+    const operation = params.operation ?? 0;
+    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
+    const ep = new ethers_1.ethers.Contract(exports.ENTRY_POINT_V07, ENTRY_POINT_V07_ABI, provider);
+    // Get current nonce from EntryPoint
+    const nonce = await ep.getNonce(safeAddress, 0);
+    // Encode callData: Safe4337Module.executeUserOp(to, value, data, operation)
+    const moduleIface = new ethers_1.ethers.Interface(SAFE_4337_MODULE_ABI);
+    const callData = moduleIface.encodeFunctionData('executeUserOp', [to, value, data, operation]);
+    // Get current gas price
+    const feeData = await provider.getFeeData();
+    const maxFeePerGas = feeData.maxFeePerGas ?? ethers_1.ethers.parseUnits('20', 'gwei');
+    const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ?? ethers_1.ethers.parseUnits('1', 'gwei');
+    // Gas limits (conservative estimates for Safe4337 execution)
+    const verificationGasLimit = 150000n;
+    const callGasLimit = 200000n;
+    const preVerificationGas = 50000n;
+    const userOp = {
+        sender: safeAddress,
+        nonce,
+        initCode: '0x',
+        callData,
+        accountGasLimits: packGasLimits(verificationGasLimit, callGasLimit),
+        preVerificationGas,
+        gasFees: packGasFees(maxPriorityFeePerGas, maxFeePerGas),
+        paymasterAndData: '0x',
+        signature: '0x', // filled in after signing
+    };
+    return userOp;
+}
+// ─── Compute UserOp Hash ──────────────────────────────────────────────────────
+/**
+ * Compute the UserOp hash that the user must sign.
+ * Uses EntryPoint.getUserOpHash() for correctness.
+ */
+async function computeUserOpHash(userOp, rpcUrl) {
+    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
+    const ep = new ethers_1.ethers.Contract(exports.ENTRY_POINT_V07, ENTRY_POINT_V07_ABI, provider);
+    // Convert to tuple format for the contract call
+    const userOpTuple = [
+        userOp.sender,
+        userOp.nonce,
+        userOp.initCode,
+        userOp.callData,
+        userOp.accountGasLimits,
+        userOp.preVerificationGas,
+        userOp.gasFees,
+        userOp.paymasterAndData,
+        userOp.signature,
+    ];
+    const hash = await ep.getUserOpHash(userOpTuple);
+    return hash;
+}
+// ─── Build EIP-712 TypedData for MetaMask ────────────────────────────────────
+/**
+ * The 12-byte timestamp prefix required by Safe4337Module.
+ * Safe4337Module._getSafeOp() expects:
+ *   userOp.signature = abi.encodePacked(validAfter(6 bytes), validUntil(6 bytes), ecdsaSignature)
+ * We use validAfter=0 and validUntil=0 (no time restriction).
+ */
+const SAFE_OP_TIMESTAMP_PREFIX = '0x' + '00'.repeat(12); // 12 zero bytes
+/**
+ * Wrap a raw ECDSA signature with the Safe4337Module timestamp prefix.
+ * Safe4337Module._getSafeOp() decodes: sig[0:6]=validAfter, sig[6:12]=validUntil, sig[12:]=ecdsaSignature
+ */
+function wrapSafe4337Signature(ecdsaSignature) {
+    // Remove '0x' prefix from the ECDSA signature and prepend 12 zero bytes
+    const sigHex = ecdsaSignature.startsWith('0x') ? ecdsaSignature.slice(2) : ecdsaSignature;
+    return SAFE_OP_TIMESTAMP_PREFIX + sigHex;
+}
+/**
+ * Build the EIP-712 typed data structure for MetaMask to sign.
+ *
+ * Safe4337Module v0.3.0 uses SafeOp EIP-712 domain:
+ *   - chainId: <chain>
+ *   - verifyingContract: SAFE_4337_MODULE_V030  (the MODULE address, NOT the Safe)
+ *
+ * The type is SafeOp which matches the SAFE_OP_TYPEHASH:
+ *   keccak256("SafeOp(address safe,uint256 nonce,bytes initCode,bytes callData,
+ *     uint128 verificationGasLimit,uint128 callGasLimit,uint256 preVerificationGas,
+ *     uint128 maxPriorityFeePerGas,uint128 maxFeePerGas,bytes paymasterAndData,
+ *     uint48 validAfter,uint48 validUntil,address entryPoint)")
+ *
+ * The MetaMask signature (65 bytes) must be prefixed with 12 zero bytes
+ * (validAfter=0, validUntil=0) before being placed in userOp.signature.
+ */
+async function buildUserOpTypedData(userOp, userOpHash, chainId, rpcUrl // Optional: if provided, fetch actual chainId from RPC (for Tenderly forks)
+) {
+    // For Tenderly forks, the actual chain ID differs from the mainnet chain ID.
+    // Always fetch the actual chain ID from the RPC to ensure domain separator matches.
+    let actualChainId = chainId;
+    if (rpcUrl) {
+        const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
+        const network = await provider.getNetwork();
+        actualChainId = Number(network.chainId);
+    }
+    // Safe4337Module v0.3.0 domain: only chainId + verifyingContract (the MODULE address)
+    //
+    // CRITICAL FIX: verifyingContract MUST be the Safe4337Module address, NOT the Safe address.
+    //
+    // Why: Safe4337Module.domainSeparator() uses address(this). When validateUserOp is called
+    // via the Safe's fallback handler (CALL, not DELEGATECALL), address(this) in the module
+    // equals the MODULE address. Therefore the EIP-712 domain separator uses MODULE as
+    // verifyingContract, and we must sign with the same MODULE address.
+    //
+    // Verified on Tenderly fork: signing with verifyingContract=MODULE + Safe owner key
+    // produces validateUserOp=0 (success) and handleOps succeeds with UserOperationEvent.success=true.
+    const domain = {
+        chainId: actualChainId,
+        verifyingContract: exports.SAFE_4337_MODULE_V030, // MODULE address, not Safe address
+    };
+    // CRITICAL: The type name MUST be 'SafeOp' to match SAFE_OP_TYPEHASH in Safe4337Module v0.3.0:
+    // keccak256("SafeOp(address safe,uint256 nonce,bytes initCode,bytes callData,uint128 verificationGasLimit,
+    //   uint128 callGasLimit,uint256 preVerificationGas,uint128 maxPriorityFeePerGas,uint128 maxFeePerGas,
+    //   bytes paymasterAndData,uint48 validAfter,uint48 validUntil,address entryPoint)")
+    // = 0xc03dfc11d8b10bf9cf703d558958c8c42777f785d998c62060d85a4f0ef6ea7f
+    const types = {
+        SafeOp: [
+            { name: 'safe', type: 'address' },
+            { name: 'nonce', type: 'uint256' },
+            { name: 'initCode', type: 'bytes' },
+            { name: 'callData', type: 'bytes' },
+            { name: 'verificationGasLimit', type: 'uint128' },
+            { name: 'callGasLimit', type: 'uint128' },
+            { name: 'preVerificationGas', type: 'uint256' },
+            { name: 'maxPriorityFeePerGas', type: 'uint128' },
+            { name: 'maxFeePerGas', type: 'uint128' },
+            { name: 'paymasterAndData', type: 'bytes' },
+            { name: 'validAfter', type: 'uint48' },
+            { name: 'validUntil', type: 'uint48' },
+            { name: 'entryPoint', type: 'address' },
+        ],
+    };
+    // Unpack accountGasLimits: bytes32 = verificationGasLimit(16 bytes upper) + callGasLimit(16 bytes lower)
+    const accountGasLimitsBig = BigInt(userOp.accountGasLimits);
+    const verificationGasLimit = accountGasLimitsBig >> 128n;
+    const callGasLimit = accountGasLimitsBig & ((1n << 128n) - 1n);
+    // Unpack gasFees: bytes32 = maxPriorityFeePerGas(16 bytes upper) + maxFeePerGas(16 bytes lower)
+    const gasFeesBig = BigInt(userOp.gasFees);
+    const maxPriorityFeePerGas = gasFeesBig >> 128n;
+    const maxFeePerGas = gasFeesBig & ((1n << 128n) - 1n);
+    const message = {
+        safe: userOp.sender,
+        nonce: userOp.nonce.toString(),
+        initCode: userOp.initCode,
+        callData: userOp.callData,
+        verificationGasLimit: verificationGasLimit.toString(),
+        callGasLimit: callGasLimit.toString(),
+        preVerificationGas: userOp.preVerificationGas.toString(),
+        maxPriorityFeePerGas: maxPriorityFeePerGas.toString(),
+        maxFeePerGas: maxFeePerGas.toString(),
+        paymasterAndData: userOp.paymasterAndData,
+        validAfter: '0',
+        validUntil: '0',
+        entryPoint: exports.ENTRY_POINT_V07,
+    };
+    return { domain, types, message };
+}
+// ─── Sign UserOp (server-side, AI key) ───────────────────────────────────────
+/**
+ * Sign the UserOp hash with the AI's private key.
+ * Safe4337Module v0.3.0 expects a raw ECDSA signature over the SafeUserOperation hash.
+ * We use signTypedData to produce the correct EIP-712 signature.
+ */
+async function signUserOpWithAI(userOp, chainId, aiPrivateKey, rpcUrl // Optional: pass to fetch actual chainId from RPC
+) {
+    const aiWallet = new ethers_1.ethers.Wallet(aiPrivateKey);
+    const { domain, types, message } = await buildUserOpTypedData(userOp, '', chainId, rpcUrl);
+    // Sign using EIP-712 — produces 65-byte ECDSA signature
+    const ecdsaSignature = await aiWallet.signTypedData(domain, types, message);
+    // Safe4337Module requires: abi.encodePacked(validAfter(6), validUntil(6), ecdsaSignature)
+    return wrapSafe4337Signature(ecdsaSignature);
+}
+// ─── Submit UserOperation ─────────────────────────────────────────────────────
+/**
+ * Submit the signed UserOperation via EntryPoint.handleOps().
+ * This bypasses the bundler and submits directly (suitable for Tenderly fork).
+ */
+async function submitSafe4337UserOp(params) {
+    const { userOp, rpcUrl, submitterKey } = params;
+    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
+    const submitter = new ethers_1.ethers.Wallet(submitterKey, provider);
+    const ep = new ethers_1.ethers.Contract(exports.ENTRY_POINT_V07, ENTRY_POINT_V07_ABI, submitter);
+    // Compute userOpHash for reference
+    const userOpHash = await computeUserOpHash(userOp, rpcUrl);
+    // Convert to tuple
+    const userOpTuple = [
+        userOp.sender,
+        userOp.nonce,
+        userOp.initCode,
+        userOp.callData,
+        userOp.accountGasLimits,
+        userOp.preVerificationGas,
+        userOp.gasFees,
+        userOp.paymasterAndData,
+        userOp.signature,
+    ];
+    // Submit via handleOps
+    const tx = await ep.handleOps([userOpTuple], submitter.address, {
+        gasLimit: 1_000_000,
+    });
+    const receipt = await tx.wait();
+    // Check for UserOperationEvent
+    const userOpEventTopic = ethers_1.ethers.id('UserOperationEvent(bytes32,address,address,uint256,bool,uint256,uint256)');
+    const userOpLog = receipt.logs.find((l) => l.topics[0] === userOpEventTopic);
+    if (userOpLog) {
+        // Decode: UserOperationEvent(bytes32 userOpHash, address sender, address paymaster, uint256 nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)
+        // UserOperationEvent v0.7: topics[1]=userOpHash, topics[2]=sender, topics[3]=paymaster
+        // data = abi.encode(nonce, bool success, uint256 actualGasCost, uint256 actualGasUsed)
+        const decoded = ethers_1.ethers.AbiCoder.defaultAbiCoder().decode(['uint256', 'bool', 'uint256', 'uint256'], userOpLog.data);
+        const success = decoded[1];
+        if (!success) {
+            throw new Error(`UserOperation failed on-chain. UserOpHash: ${userOpHash}`);
+        }
+    }
+    return {
+        userOpHash,
+        txHash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+        gasUsed: Number(receipt.gasUsed),
+        safeAddress: userOp.sender,
+        entryPoint: exports.ENTRY_POINT_V07,
+    };
+}
+// ─── Full E2E Execution ───────────────────────────────────────────────────────
+/**
+ * Full Safe4337 execution flow (used by server.ts after user signature is collected):
+ *   1. Attach user signature to UserOp
+ *   2. Submit via EntryPoint.handleOps()
+ *   3. Return execution result
+ */
+async function executeSafe4337WithSignature(params) {
+    const { userOp, userSignature, rpcUrl, submitterKey } = params;
+    // Wrap the user's ECDSA signature with Safe4337Module timestamp prefix
+    // Safe4337Module._getSafeOp() expects: abi.encodePacked(validAfter(6), validUntil(6), ecdsaSignature)
+    const wrappedSignature = wrapSafe4337Signature(userSignature);
+    // Attach the wrapped signature to the UserOp
+    const signedUserOp = {
+        ...userOp,
+        signature: wrappedSignature,
+    };
+    return submitSafe4337UserOp({ userOp: signedUserOp, rpcUrl, submitterKey });
+}
+// ─── Deploy new Safe with Safe4337Module ─────────────────────────────────────
+/**
+ * Deploy a new Safe proxy with Safe4337Module enabled.
+ * Used for onboarding new users who don't have a Safe4337 account yet.
+ */
+async function deployNewSafe4337Account(params) {
+    const { owners, threshold, saltNonce, rpcUrl, deployerKey } = params;
+    const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
+    const deployer = new ethers_1.ethers.Wallet(deployerKey, provider);
+    const SAFE_PROXY_FACTORY_ABI_DEPLOY = [
+        'function createProxyWithNonce(address _singleton, bytes memory initializer, uint256 saltNonce) external returns (address proxy)',
+        'function proxyCreationCode() external pure returns (bytes memory)',
+    ];
+    const SAFE_SETUP_ABI = [
+        'function setup(address[] calldata _owners, uint256 _threshold, address to, bytes calldata data, address fallbackHandler, address paymentToken, uint256 payment, address payable paymentReceiver) external',
+    ];
+    const SAFE_MODULE_SETUP_ABI_LOCAL = [
+        'function enableModules(address[] calldata modules) external',
+    ];
+    const moduleSetupIface = new ethers_1.ethers.Interface(SAFE_MODULE_SETUP_ABI_LOCAL);
+    const enableModulesData = moduleSetupIface.encodeFunctionData('enableModules', [
+        [exports.SAFE_4337_MODULE_V030],
+    ]);
+    const safeIface = new ethers_1.ethers.Interface(SAFE_SETUP_ABI);
+    const setupData = safeIface.encodeFunctionData('setup', [
+        owners,
+        threshold,
+        exports.SAFE_MODULE_SETUP_V030,
+        enableModulesData,
+        exports.SAFE_4337_MODULE_V030,
+        ethers_1.ethers.ZeroAddress,
+        0,
+        ethers_1.ethers.ZeroAddress,
+    ]);
+    const factory = new ethers_1.ethers.Contract(exports.SAFE_PROXY_FACTORY_V141, SAFE_PROXY_FACTORY_ABI_DEPLOY, deployer);
+    const tx = await factory.createProxyWithNonce(exports.SAFE_L2_V141, setupData, saltNonce, { gasLimit: 500_000 });
+    const receipt = await tx.wait();
+    // Extract address from ProxyCreation event
+    const proxyCreationTopic = ethers_1.ethers.id('ProxyCreation(address,address)');
+    const log = receipt.logs.find((l) => l.topics[0] === proxyCreationTopic);
+    if (!log)
+        throw new Error('ProxyCreation event not found');
+    const safeAddress = ethers_1.ethers.AbiCoder.defaultAbiCoder().decode(['address'], log.topics[1])[0];
+    return safeAddress;
+}

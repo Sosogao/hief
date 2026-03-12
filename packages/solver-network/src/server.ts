@@ -23,7 +23,6 @@ import cors from 'cors';
 import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
-import initSqlJs from 'sql.js';
 import { detectAccountMode, proposeSafeMultisig, executeWithSignatures, buildSafeTxTypedData, type AccountInfo, type ExecutionMode, type SafeTxData, type SafeProposalResult } from './safeMultisig';
 import { executeERC4337, getOrCreateSimpleAccount, ENTRY_POINT_V06, type ERC4337ExecutionResult } from './erc4337';
 import {
