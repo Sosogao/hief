@@ -174,3 +174,45 @@ not `userOp.sender` (the Safe address).
 - Trigger endpoint: returns full auction result in ~5s ✅
 - Test wallets endpoint: returns 3 wallets with balances ✅
 - Error messages: now show actual error instead of hardcoded "port 3006" ✅
+
+---
+
+## [0.0.5] - 2026-03-12
+
+### Bug Fixes
+
+#### Bug 1 — Fork Config Panel Shows "❌ Service starting up" After Switching RPC
+
+- **Root cause**: `gateway.js` does not wait for `solver-network` (port 3008) to be ready before accepting requests. When a new fork URL is applied immediately after startup, the proxy returns `503 ECONNREFUSED` with `{ error: 'Service starting up' }`.
+- **Fix** (`apps/explorer/index.html` — `saveForkConfig`): Added automatic retry logic. On `503`, the function waits 3 s and retries up to 3 times, showing `⏳ Retrying... (N/3)`. After 3 failures, displays a friendly `⚠️ Solver service is still starting up. Please wait ~10s and click Apply again.` message instead of a raw error.
+
+#### Bug 2 — EOA Flow Hangs at "Running solver auction & pre-settlement simulation..."
+
+Two independent root causes:
+
+**Server-side** (`packages/solver-network/src/server.ts`):
+- **Root cause**: `simulateSettlement()` called `fetch(TENDERLY_RPC_URL, ...)` with no timeout. If the Tenderly fork RPC was slow or unreachable, the request would hang indefinitely, blocking the entire auction.
+- **Fix**: Added `signal: AbortSignal.timeout(8000)` to the Tenderly simulation fetch — aborts after 8 s.
+- **Root cause 2**: `detectAccountMode()` (ethers.js RPC call to classify EOA/Safe/ERC-4337) had no timeout either.
+- **Fix**: Wrapped `detectAccountMode()` in `Promise.race()` with a 6 s rejection timeout in `runAuction()`.
+
+**Frontend-side** (`apps/explorer/index.html` — trigger fetch):
+- **Root cause**: The trigger `fetch()` had no timeout and no `else` branch for `success === false`, so failures were silently swallowed.
+- **Fix**: Added `AbortController` with 30 s timeout to the trigger fetch. Added `else` branch to display `⚠️ Solver auction error: <message>`. `AbortError` shows a specific message advising to check the Tenderly fork URL.
+
+#### Bug 3 — Safe Multisig Search Fails with "Cannot read properties of null (reading 'getContext')"
+
+- **Root cause**: `createHistory()` used `ctx.canvas.parentElement.innerHTML = '...'` to replace the "No history yet" placeholder. This destroyed the existing `<canvas id="historyChart">` DOM node. On the next call, `document.getElementById('historyChart')` returned `null`, and `.getContext('2d')` threw the error.
+- **Fix** (`apps/explorer/index.html`):
+  - Added `id="historyChartContainer"` to the canvas wrapper `<div>`.
+  - Rewrote `createHistory()`: never destroys the canvas element. Uses `canvas.style.display = 'none'` + a sibling `<div id="historyNoDataMsg">` for the empty state. Calls `historyChartInst.destroy()` before re-creating the Chart.js instance to prevent memory leaks.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `apps/explorer/index.html` | `saveForkConfig`: retry logic on 503 (Bug 1) |
+| `apps/explorer/index.html` | trigger fetch: AbortController 30 s timeout + else branch (Bug 2) |
+| `apps/explorer/index.html` | `historyChartContainer` id + `createHistory` canvas lifecycle fix (Bug 3) |
+| `packages/solver-network/src/server.ts` | `simulateSettlement`: `AbortSignal.timeout(8000)` on Tenderly fetch (Bug 2) |
+| `packages/solver-network/src/server.ts` | `runAuction`: `Promise.race` 6 s timeout on `detectAccountMode` (Bug 2) |

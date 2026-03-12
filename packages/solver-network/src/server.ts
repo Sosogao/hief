@@ -346,6 +346,7 @@ async function simulateSettlement(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(simPayload),
+    signal: AbortSignal.timeout(8000),
   });
   const simJson = await simRes.json() as any;
 
@@ -642,7 +643,10 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
         let executionMode: 'DIRECT' | 'MULTISIG' | 'ERC4337' | 'ERC4337_SAFE' = 'DIRECT';
         if (smartAccount && smartAccount.startsWith('0x')) {
           try {
-            accountInfo = await detectAccountMode(smartAccount, TENDERLY_RPC_URL, SETTLEMENT_CHAIN_ID);
+            accountInfo = await Promise.race([
+              detectAccountMode(smartAccount, TENDERLY_RPC_URL, SETTLEMENT_CHAIN_ID),
+              new Promise<AccountInfo>((_, reject) => setTimeout(() => reject(new Error('detectAccountMode timeout')), 6000)),
+            ]);
             executionMode = accountInfo.mode;
             console.log(`[SolverNetwork] Account mode: ${executionMode} | threshold: ${accountInfo.threshold} | isSafe: ${accountInfo.isSafe} | isERC4337: ${accountInfo.isERC4337}`);
           } catch (modeErr: any) {

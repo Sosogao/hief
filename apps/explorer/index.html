@@ -200,7 +200,7 @@
       <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4" id="metricsGrid"></div>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
         <div class="glass rounded-2xl p-5"><h3 class="text-sm font-semibold text-slate-300 mb-4">Dimension Radar</h3><div style="height:220px;"><canvas id="radarChart"></canvas></div></div>
-        <div class="glass rounded-2xl p-5"><h3 class="text-sm font-semibold text-slate-300 mb-4">Score History</h3><div style="height:220px;"><canvas id="historyChart"></canvas></div></div>
+        <div class="glass rounded-2xl p-5"><h3 class="text-sm font-semibold text-slate-300 mb-4">Score History</h3><div id="historyChartContainer" style="height:220px;"><canvas id="historyChart"></canvas></div></div>
       </div>
       <div class="glass rounded-2xl p-5 mb-4">
         <h3 class="text-sm font-semibold text-slate-300 mb-4">Intent History for this Address</h3>
@@ -476,9 +476,34 @@ function createRadar(scores) {
 }
 
 function createHistory(history) {
-  var ctx = document.getElementById('historyChart').getContext('2d');
-  if (historyChartInst) historyChartInst.destroy();
-  if (!history || !history.length) { ctx.canvas.parentElement.innerHTML = '<div class="flex items-center justify-center h-full text-xs text-slate-500">No history yet</div>'; return; }
+  // Restore canvas if it was replaced by a previous "no history" render
+  var container = document.getElementById('historyChartContainer');
+  if (!document.getElementById('historyChart') && container) {
+    container.innerHTML = '<canvas id="historyChart"></canvas>';
+  }
+  var canvas = document.getElementById('historyChart');
+  if (!canvas) return;
+  if (historyChartInst) { historyChartInst.destroy(); historyChartInst = null; }
+  if (!history || !history.length) {
+    // Show "no data" message without destroying the canvas element
+    canvas.style.display = 'none';
+    var existingMsg = document.getElementById('historyNoDataMsg');
+    if (!existingMsg) {
+      var msg = document.createElement('div');
+      msg.id = 'historyNoDataMsg';
+      msg.className = 'flex items-center justify-center h-full text-xs text-slate-500';
+      msg.textContent = 'No history yet';
+      if (container) container.appendChild(msg);
+    } else {
+      existingMsg.style.display = '';
+    }
+    return;
+  }
+  // Hide the "no data" message and restore canvas visibility
+  canvas.style.display = '';
+  var noDataMsg = document.getElementById('historyNoDataMsg');
+  if (noDataMsg) noDataMsg.style.display = 'none';
+  var ctx = canvas.getContext('2d');
   historyChartInst = new Chart(ctx, { type:'line', data:{ labels:history.map(function(h){ return new Date(h.computedAt).toLocaleDateString(); }), datasets:[{ data:history.map(function(h){ return h.scores&&h.scores.final||h.finalScore||0; }), borderColor:'#6366f1', backgroundColor:'rgba(99,102,241,0.1)', fill:true, tension:0.4, pointRadius:3, pointBackgroundColor:'#6366f1', borderWidth:2 }] }, options:{ responsive:true, maintainAspectRatio:false, scales:{ x:{ticks:{color:'#64748b',font:{size:10}},grid:{display:false}}, y:{min:0,max:1000,ticks:{color:'#64748b',font:{size:10}},grid:{color:'rgba(255,255,255,0.05)'}} }, plugins:{legend:{display:false}} } });
 }
 
@@ -722,17 +747,23 @@ async function confirmChatIntent() {
           // Trigger solver network auction (now returns simulation, not settlement)
           setTimeout(async function() {
             try {
+              var triggerController = new AbortController();
+              var triggerTimeout = setTimeout(function() { triggerController.abort(); }, 30000);
               var solverRes = await fetch(SOLVER_API+'/v1/solver-network/trigger', {
                 method: 'POST',
                 headers: {'Content-Type':'application/json'},
-                body: JSON.stringify({ intentId: intentId })
+                body: JSON.stringify({ intentId: intentId }),
+                signal: triggerController.signal
               });
+              clearTimeout(triggerTimeout);
               var solverJson = await solverRes.json();
               if (solverJson.success && solverJson.data) {
                 var d = solverJson.data;
                 var w = d.winner;
                 if (w) {
                   appendChatMessage('system', '🏆 Auction complete! Winner: '+w.solverName+' | Net: $'+w.netOutUSD.toFixed(4)+' | Route: '+w.route);
+                } else {
+                  appendChatMessage('system', '⚠️ Auction complete but no valid quotes found. Check that the RPC fork is reachable.');
                 }
                 // Show simulation result card with confirm button (mode-aware)
                 var accountInfo = d.accountInfo || null;
@@ -752,10 +783,18 @@ async function confirmChatIntent() {
                   showSimulationCard(intentId, null, w, accountInfo);
                 }
                 setTimeout(loadStats, 1000);
+              } else {
+                // Trigger returned error — show it so the user knows what happened
+                var errMsg = solverJson.error || (solverRes.status === 503 ? 'Solver service is still starting up' : 'Auction failed');
+                appendChatMessage('system', '⚠️ Solver auction error: ' + errMsg + '. You can retry by submitting a new intent.');
               }
             } catch(e) {
+              if (e.name === 'AbortError') {
+                appendChatMessage('system', '⚠️ Solver auction timed out (30s). The RPC fork may be unreachable. Check your Tenderly fork URL.');
+              } else {
+                appendChatMessage('system', '⚠️ Solver error: '+e.message);
+              }
               console.error('Solver trigger error:', e);
-              appendChatMessage('system', '⚠️ Solver error: '+e.message);
             }
           }, 1500);
           chatPendingIntent = null;
@@ -1325,19 +1364,28 @@ function setForkPreset(url, chainId) {
   document.getElementById('forkChainIdInput').value = chainId;
 }
 
-async function saveForkConfig() {
+async function saveForkConfig(retryCount) {
+  retryCount = retryCount || 0;
   var url = document.getElementById('forkRpcInput').value.trim();
   var chainId = parseInt(document.getElementById('forkChainIdInput').value.trim(), 10);
   var statusEl = document.getElementById('forkConfigStatus');
   if (!url || !url.startsWith('http')) { statusEl.textContent = '❌ Invalid RPC URL'; statusEl.style.color='#f87171'; return; }
   if (!chainId || isNaN(chainId)) { statusEl.textContent = '❌ Invalid Chain ID'; statusEl.style.color='#f87171'; return; }
-  statusEl.textContent = '⏳ Applying...'; statusEl.style.color='#94a3b8';
+  statusEl.textContent = retryCount > 0 ? '⏳ Retrying... (' + retryCount + '/3)' : '⏳ Applying...';
+  statusEl.style.color='#94a3b8';
   try {
     var res = await fetch(SOLVER_API+'/v1/solver-network/config', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
       body: JSON.stringify({ tenderlyRpcUrl: url, settlementChainId: chainId })
     });
+    // Solver network may still be starting — auto-retry up to 3 times
+    if (res.status === 503 && retryCount < 3) {
+      statusEl.textContent = '⏳ Solver service starting, retrying in 3s... (' + (retryCount+1) + '/3)';
+      statusEl.style.color='#94a3b8';
+      await new Promise(function(r){ setTimeout(r, 3000); });
+      return saveForkConfig(retryCount + 1);
+    }
     var json = await res.json();
     if (json.success) {
       _currentForkUrl = json.data.current.tenderlyRpcUrl;
@@ -1347,6 +1395,9 @@ async function saveForkConfig() {
       statusEl.textContent = '✅ Applied! Fork URL and Chain ID updated.';
       statusEl.style.color='#4ade80';
       setTimeout(function() { toggleForkPanel(); loadTestWallets(); }, 1200);
+    } else if (res.status === 503) {
+      statusEl.textContent = '⚠️ Solver service is still starting up. Please wait ~10s and click Apply again.';
+      statusEl.style.color='#f59e0b';
     } else {
       statusEl.textContent = '❌ ' + (json.error || 'Failed to update config');
       statusEl.style.color='#f87171';
