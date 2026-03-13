@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **chainId=1 signing error** — `buildUserOpTypedData` no longer fetches chainId from the Tenderly RPC (Tenderly virtual testnets can return the underlying mainnet chainId=1 instead of the fork chainId); now always uses the configured `SETTLEMENT_CHAIN_ID`
+- **MetaMask chain preflight** — before signing Safe TX or UserOp, the explorer checks `eth_chainId` and calls `wallet_switchEthereumChain` if MetaMask is on the wrong chain; shows a clear error if the switch is rejected
+
 ### Added
 - **Session/wallet mismatch warning** in AI DeFi Agent — when the active wallet address differs from the session's wallet, a yellow warning banner is shown with a "Start New Session" button; triggered on test wallet selection, created wallet selection, and manual chatWallet input edits
 - **Test Wallets Panel** in Explorer UI — three pre-configured accounts covering all execution modes

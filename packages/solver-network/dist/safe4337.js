@@ -266,16 +266,13 @@ function wrapSafe4337Signature(ecdsaSignature) {
  * The MetaMask signature (65 bytes) must be prefixed with 12 zero bytes
  * (validAfter=0, validUntil=0) before being placed in userOp.signature.
  */
-async function buildUserOpTypedData(userOp, userOpHash, chainId, rpcUrl // Optional: if provided, fetch actual chainId from RPC (for Tenderly forks)
+async function buildUserOpTypedData(userOp, userOpHash, chainId, _rpcUrl // kept for API compatibility, no longer used (trust SETTLEMENT_CHAIN_ID)
 ) {
-    // For Tenderly forks, the actual chain ID differs from the mainnet chain ID.
-    // Always fetch the actual chain ID from the RPC to ensure domain separator matches.
-    let actualChainId = chainId;
-    if (rpcUrl) {
-        const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
-        const network = await provider.getNetwork();
-        actualChainId = Number(network.chainId);
-    }
+    // Use the explicitly configured chainId (SETTLEMENT_CHAIN_ID).
+    // Previously we fetched chainId from the RPC, but Tenderly virtual testnets can return
+    // the underlying mainnet chainId (1) instead of the fork chainId (e.g. 99917), causing
+    // MetaMask to reject the signing request with "chainId should be same as current chainId".
+    const actualChainId = chainId;
     // Safe4337Module v0.3.0 domain: only chainId + verifyingContract (the MODULE address)
     //
     // CRITICAL FIX: verifyingContract MUST be the Safe4337Module address, NOT the Safe address.

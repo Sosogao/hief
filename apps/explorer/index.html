@@ -1157,6 +1157,29 @@ function showMultisigPendingCard(intentId, proposalData) {
   container.scrollTop = container.scrollHeight;
 }
 
+// Ensure MetaMask is connected to the expected chain, prompting a switch if needed.
+// Returns true if chain is correct (or switched), false if user dismissed/error.
+async function ensureMetaMaskChain(expectedChainId) {
+  try {
+    var hexChainId = await window.ethereum.request({ method: 'eth_chainId' });
+    var current = parseInt(hexChainId, 16);
+    if (current === expectedChainId) return true;
+    appendChatMessage('system', '⚠️ MetaMask is on chainId=' + current + ', but this intent requires chainId=' + expectedChainId + '. Requesting network switch...');
+    try {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x' + expectedChainId.toString(16) }]
+      });
+      return true;
+    } catch(switchErr) {
+      appendChatMessage('system', '❌ Please switch MetaMask to chainId=' + expectedChainId + ' (the Tenderly fork) and try again.');
+      return false;
+    }
+  } catch(e) {
+    return true; // can't check, proceed and let MetaMask surface the error
+  }
+}
+
 // Request EIP-712 signature from MetaMask and submit to backend
 async function requestMetaMaskSignature(intentId) {
   var btn = document.getElementById('btnMsConfirm-'+intentId);
@@ -1181,6 +1204,13 @@ async function requestMetaMaskSignature(intentId) {
     var accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
     var coSignerAddress = accounts[0];
     appendChatMessage('system', '🦊 MetaMask connected: ' + coSignerAddress.slice(0,10) + '...');
+
+    // Ensure MetaMask is on the correct chain before signing
+    var expectedChain = (proposalData.chainId) || _currentChainId;
+    if (!(await ensureMetaMaskChain(expectedChain))) {
+      if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign with MetaMask & Execute'; }
+      return;
+    }
 
     // Request EIP-712 typed data signature
     appendChatMessage('system', '🔐 Requesting Safe TX signature from MetaMask...');
@@ -1296,6 +1326,13 @@ async function requestSafe4337Signature(intentId) {
     var accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
     var signerAddress = accounts[0];
     appendChatMessage('system', '🦊 MetaMask connected: ' + signerAddress.slice(0,10) + '...');
+
+    // Ensure MetaMask is on the correct chain before signing
+    var expectedChain4337 = (proposalData.safeInfo && proposalData.safeInfo.chainId) || _currentChainId;
+    if (!(await ensureMetaMaskChain(expectedChain4337))) {
+      if (btn) { btn.disabled = false; btn.textContent = '🦊 Sign UserOp with MetaMask & Execute'; }
+      return;
+    }
 
     // Request EIP-712 UserOp signature (Safe4337Module uses EIP-712 domain)
     appendChatMessage('system', '🛡 Requesting UserOp signature from MetaMask...');

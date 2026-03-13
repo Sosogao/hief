@@ -341,21 +341,18 @@ export async function buildUserOpTypedData(
   userOp: PackedUserOperation,
   userOpHash: string,
   chainId: number,
-  rpcUrl?: string   // Optional: if provided, fetch actual chainId from RPC (for Tenderly forks)
+  _rpcUrl?: string   // kept for API compatibility, no longer used (trust SETTLEMENT_CHAIN_ID)
 ): Promise<{
   domain:      Record<string, unknown>;
   types:       Record<string, unknown[]>;
   message:     Record<string, unknown>;
   primaryType: string;
 }> {
-  // For Tenderly forks, the actual chain ID differs from the mainnet chain ID.
-  // Always fetch the actual chain ID from the RPC to ensure domain separator matches.
-  let actualChainId = chainId;
-  if (rpcUrl) {
-    const provider = new ethers.JsonRpcProvider(rpcUrl);
-    const network = await provider.getNetwork();
-    actualChainId = Number(network.chainId);
-  }
+  // Use the explicitly configured chainId (SETTLEMENT_CHAIN_ID).
+  // Previously we fetched chainId from the RPC, but Tenderly virtual testnets can return
+  // the underlying mainnet chainId (1) instead of the fork chainId (e.g. 99917), causing
+  // MetaMask to reject the signing request with "chainId should be same as current chainId".
+  const actualChainId = chainId;
 
   // Safe4337Module v0.3.0 domain: only chainId + verifyingContract (the MODULE address)
   //
