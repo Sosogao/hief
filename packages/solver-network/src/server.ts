@@ -187,7 +187,8 @@ interface SolverQuote {
   route: string;
   status: 'QUOTED' | 'FAILED' | 'TIMEOUT';
   error?: string;
-  swapQuote?: DexQuote;   // real DEX calldata (populated for on-chain execution)
+  swapQuote?: DexQuote;       // real DEX calldata (populated for on-chain execution)
+  execQuote?: DexQuote;       // fork-compatible execution quote (UniV3) — used when swapQuote is Odos (mainnet-only)
 }
 
 /** Token decimals for converting raw amounts to human-readable */
@@ -219,16 +220,22 @@ async function generateQuote(
   const outputPrice = getTokenPrice(outputTokenSymbol);
 
   let dexQuote: DexQuote | null = null;
+  let execQuote: DexQuote | null = null;  // fork-compatible execution quote (always UniV3)
   try {
     if (solver.protocol === 'Odos') {
+      // Odos: use for price discovery (mainnet API), but also get UniV3 for fork execution
       dexQuote = await quoteOdos(tokenIn, tokenOut, amountIn, recipient, slippageBps);
+      // Always get UniV3 as fork-compatible execution fallback (Odos calldata fails on diverged fork)
+      execQuote = await quoteUniswapV3(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
     } else if (solver.protocol === 'Uniswap V3') {
       dexQuote = await quoteUniswapV3(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
+      execQuote = dexQuote;  // UniV3 is already fork-compatible
     } else {
-      // HIEF Native: try Uniswap V3 first, then Odos as fallback
+      // HIEF Native: try Uniswap V3 first (fork-compatible), then Odos as fallback
       dexQuote = await quoteUniswapV3(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
       if (!dexQuote) dexQuote = await quoteOdos(tokenIn, tokenOut, amountIn, recipient, slippageBps);
       if (dexQuote) dexQuote = { ...dexQuote, protocol: 'HIEF Native', route: dexQuote.route + ' (via HIEF)' };
+      execQuote = dexQuote;
     }
   } catch (e) {
     console.warn(`[${solver.protocol}] quote error:`, (e as Error).message?.slice(0, 100));
@@ -262,12 +269,23 @@ async function generateQuote(
     route: dexQuote.route,
     status: 'QUOTED',
     swapQuote: dexQuote,
+    execQuote: execQuote ?? dexQuote,  // fork execution uses UniV3; fallback to swapQuote
   };
 }
 
 // ─── Settlement Engine ───────────────────────────────────────────────────────
 // TENDERLY_RPC is an alias for TENDERLY_RPC_URL (kept for backward compat with simulateSettlement)
 // Note: use TENDERLY_RPC_URL (the let variable) for all new code so runtime updates take effect
+/**
+ * Pick the right DexQuote for on-chain execution on the Tenderly fork.
+ * Odos calldata is generated from live mainnet state and will revert on a diverged fork.
+ * UniV3 calldata is generated against the fork's own pool state and always works on fork.
+ * execQuote = UniV3 fallback stored alongside the Odos swapQuote; use it for settlement.
+ */
+function getExecQuote(winner: SolverQuote): DexQuote | undefined {
+  return winner.execQuote ?? winner.swapQuote;
+}
+
 const SETTLEMENT_PRIVATE_KEY = process.env.SETTLEMENT_PRIVATE_KEY ||
   '0xf2be7fd8f35f99b3838c9dc7e1bdbeccaefb9031ebd223a18c1a8e54f5bb780d';
 // Ethereum Mainnet token addresses (used on Tenderly mainnet fork)
@@ -310,8 +328,8 @@ async function simulateSettlement(
   const inputSymbol  = extractInputToken(intent);
   const outputSymbol = extractOutputToken(intent);
 
-  // Use the real DEX quote's amountOut if available (already validated on-chain/API)
-  const swapQ: DexQuote | undefined = winner?.swapQuote;
+  // Use fork-compatible execution quote for simulation (UniV3 works on fork; Odos may not)
+  const swapQ: DexQuote | undefined = winner ? getExecQuote(winner) : undefined;
   const amountIn  = BigInt(intent.input?.amount || '0');
   const amountOut = swapQ ? swapQ.amountOut : 0n;
 
@@ -391,7 +409,8 @@ async function settleOnChain(
 
   const tokenIn  = intent.input?.token  || '';
   const amountIn = BigInt(intent.input?.amount || '0');
-  const swapQ: DexQuote | undefined = winner?.swapQuote;
+  // Use fork-compatible execution quote (UniV3); Odos calldata uses live mainnet state and reverts on diverged fork
+  const swapQ: DexQuote | undefined = winner ? getExecQuote(winner) : undefined;
 
   let txHash = '';
   let blockNumber = 0;
@@ -566,8 +585,8 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
       intentHash,
       solverId: winnerSolver.wallet.address,
       executionPlan: {
-        calls: winner.swapQuote
-          ? buildSwapCalls(intent.input?.token || '', BigInt(intent.input?.amount || '0'), winner.swapQuote)
+        calls: getExecQuote(winner)
+          ? buildSwapCalls(intent.input?.token || '', BigInt(intent.input?.amount || '0'), getExecQuote(winner)!)
               .map(c => ({ to: c.to, value: c.value.toString(), data: c.data, operation: 'CALL' as const }))
           : [{ to: intent.outputs?.[0]?.token || WETH_ADDRESS, value: winner.expectedOut, data: '0x', operation: 'CALL' as const }],
       },
@@ -638,8 +657,8 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
             console.log(`[SafeMultisig] Proposing Safe TX for ${intentId.slice(0, 16)}... | threshold: ${accountInfo.threshold}`);
             let multisigProposal: (SafeProposalResult & { threshold: number }) | undefined;
             try {
-              // Build real swap calldata from the winning DEX quote
-              const swapQ = winner.swapQuote;
+              // Build real swap calldata using fork-compatible execution quote (UniV3)
+              const swapQ = getExecQuote(winner);
               let msTo: string, msValue: string, msData: string, msOp: 0 | 1;
               if (swapQ) {
                 if (swapQ.needsApproval) {
@@ -714,7 +733,7 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
               }
 
               // Build real swap calldata from the winning DEX quote
-              const swapQ4337 = winner.swapQuote;
+              const swapQ4337 = getExecQuote(winner);
               let uoTo: string, uoValue: bigint, uoData: string, uoOp: 0 | 1;
               if (swapQ4337) {
                 if (swapQ4337.needsApproval) {
