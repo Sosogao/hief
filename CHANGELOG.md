@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- **Real DEX solver integration** — solver auction now queries live DEX protocols:
+  - **Odos Aggregator** — multi-hop routing across Uniswap, Curve, Balancer, 100+ sources via Odos API (free, no key)
+  - **Uniswap V3 Direct** — on-chain QuoterV2 quote (0.05%/0.3%/1% fee tiers) + SwapRouter02 calldata
+  - **HIEF Native** — fallback to best available on-chain route
+- **Real swap calldata in execution plans** — winning quote's `approve + swap` calldata embedded in Safe Multisig proposal and ERC-4337 UserOp so the Safe actually executes the real DEX trade on-chain
+- **Real DIRECT settlement** — settlement wallet auto-funded via `tenderly_setErc20Balance`, executes actual swap
+- **Accurate simulation output** — uses real DEX `amountOut` instead of estimated WETH mock amounts
+- **MultiSend encoding** (`dexQuoters.ts`) — `approve + swap` wrapped atomically via `MultiSendCallOnly`
+- `safeMultisig.ts`: `proposeSafeMultisig` now accepts `operation` parameter for DELEGATECALL support
+
 ### Fixed
 - **chainId=1 signing error** — `buildUserOpTypedData` no longer fetches chainId from the Tenderly RPC (Tenderly virtual testnets can return the underlying mainnet chainId=1 instead of the fork chainId); now always uses the configured `SETTLEMENT_CHAIN_ID`
 - **MetaMask chain preflight** — before signing Safe TX or UserOp, the explorer checks `eth_chainId` and calls `wallet_switchEthereumChain` if MetaMask is on the wrong chain; shows a clear error if the switch is rejected

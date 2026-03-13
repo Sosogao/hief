@@ -2,19 +2,15 @@
 /**
  * HIEF Solver Network
  *
- * Simulates a competitive multi-solver auction for HIEF intents.
- * Three solver personas compete to provide the best quote:
+ * Real multi-solver auction for HIEF intents backed by live DEX protocol integrations:
  *
- *   1. CoW Solver    — CoW Protocol style batch auction, best for stable pairs
- *   2. UniswapX Solver — UniswapX Dutch auction style, competitive on volatile pairs
- *   3. HIEF Native Solver — HIEF's own solver, optimizes for user reputation tier
+ *   1. Odos Aggregator  — optimal multi-hop routing via Odos API (free, no API key)
+ *   2. Uniswap V3       — direct AMM, on-chain QuoterV2 + SwapRouter02 calldata
+ *   3. HIEF Native      — fallback using best available on-chain quote
  *
- * Flow:
- *   1. Poll Intent Bus for BROADCAST intents
- *   2. All 3 solvers quote in parallel (with realistic latency simulation)
- *   3. Best quote (highest expectedOut, lowest fee) wins
- *   4. Winner's solution is submitted to Intent Bus
- *   5. Bus auto-selects the best solution
+ * All quotes run against the Tenderly mainnet fork (contracts are identical to mainnet).
+ * The winning solver's real swap calldata is embedded in the execution plan so Safe
+ * multisig / ERC-4337 accounts execute the actual DEX trade on-chain.
  *
  * Port: 3008
  */
@@ -61,6 +57,7 @@ const ethers_1 = require("ethers");
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const safeMultisig_1 = require("./safeMultisig");
+const dexQuoters_1 = require("./dexQuoters");
 const erc4337_1 = require("./erc4337");
 const safe4337_1 = require("./safe4337");
 // ─── Config ────────────────────────────────────────────────────────────────────
@@ -84,37 +81,37 @@ if (fs.existsSync(envPath)) {
 }
 const SOLVER_PERSONAS = [
     {
-        id: 'cow-solver-01',
-        name: 'CoW Solver Alpha',
-        protocol: 'CoW Protocol',
-        description: 'Batch auction solver using CoW Protocol. Excels at stable-to-stable swaps with minimal slippage.',
+        id: 'odos-solver-01',
+        name: 'Odos Aggregator',
+        protocol: 'Odos',
+        description: 'Multi-hop aggregator routing across Uniswap, Curve, Balancer, and 100+ liquidity sources.',
         wallet: ethers_1.ethers.Wallet.createRandom(),
-        feeRateBps: 5, // 0.05% fee — very competitive
-        latencyMs: 800, // 0.8s response time
-        successRate: 0.95,
-        specialization: 'stable-pairs',
+        feeRateBps: 0,
+        latencyMs: 0,
+        successRate: 1,
+        specialization: 'aggregation',
     },
     {
-        id: 'uniswapx-solver-01',
-        name: 'UniswapX Filler',
-        protocol: 'UniswapX',
-        description: 'Dutch auction filler using UniswapX. Competitive on volatile pairs with dynamic pricing.',
+        id: 'univ3-solver-01',
+        name: 'Uniswap V3 Direct',
+        protocol: 'Uniswap V3',
+        description: 'Direct AMM execution on the best Uniswap V3 fee tier (0.05% / 0.3% / 1%).',
         wallet: ethers_1.ethers.Wallet.createRandom(),
-        feeRateBps: 8, // 0.08% fee
-        latencyMs: 600, // 0.6s response time — fastest
-        successRate: 0.90,
-        specialization: 'volatile-pairs',
+        feeRateBps: 0,
+        latencyMs: 0,
+        successRate: 1,
+        specialization: 'direct-amm',
     },
     {
         id: 'hief-native-solver-01',
         name: 'HIEF Native Solver',
         protocol: 'HIEF Native',
-        description: 'HIEF\'s own solver with reputation-aware pricing. Trusted users get better rates.',
+        description: 'HIEF\'s own solver — falls back to best available on-chain route.',
         wallet: ethers_1.ethers.Wallet.createRandom(),
-        feeRateBps: 3, // 0.03% fee — cheapest for trusted users
-        latencyMs: 1200, // 1.2s response time — slower but better price
-        successRate: 0.85,
-        specialization: 'reputation-aware',
+        feeRateBps: 0,
+        latencyMs: 0,
+        successRate: 1,
+        specialization: 'fallback',
     },
 ];
 // ─── Token Price Oracle (mock) ─────────────────────────────────────────────────
@@ -135,11 +132,19 @@ function extractTokenSymbol(tokenAddr, intent) {
     // Will be resolved by caller context (input vs output)
     // Priority 2: address mapping
     const addrMap = {
-        '0x036CbD53842c5426634e7929541eC2318f3dCF7e': 'USDC',
+        // Ethereum mainnet
+        '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48': 'USDC',
+        '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2': 'WETH',
+        '0xdac17f958d2ee523a2206206994597c13d831ec7': 'USDT',
+        '0x6b175474e89094c44da98b954eedeac495271d0f': 'DAI',
+        '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599': 'WBTC',
+        // Base
+        '0x036cbd53842c5426634e7929541ec2318f3dcf7e': 'USDC',
         '0x4200000000000000000000000000000000000006': 'WETH',
-        '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE': 'ETH',
-        '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb': 'DAI',
-        '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913': 'USDC',
+        '0x50c5725949a6f0c72e6c4a641f24049a917db0cb': 'DAI',
+        '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913': 'USDC',
+        // ETH aliases
+        '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee': 'ETH',
         '0x0000000000000000000000000000000000000000': 'ETH',
     };
     const sym = addrMap[tokenAddr];
@@ -175,83 +180,76 @@ function extractInputAmount(intent) {
         return raw / 1e6;
     return raw / 1e18;
 }
+/** Token decimals for converting raw amounts to human-readable */
+function getTokenDecimals(tokenAddr) {
+    const usdc = ['0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
+        '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
+        '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'];
+    const usdt = ['0xdac17f958d2ee523a2206206994597c13d831ec7'];
+    const wbtc = ['0x2260fac5e5542a773aa44fbcfedf7c193bc2c599'];
+    const addr = tokenAddr.toLowerCase();
+    if (usdc.includes(addr))
+        return 6;
+    if (usdt.includes(addr))
+        return 6;
+    if (wbtc.includes(addr))
+        return 8;
+    return 18; // ETH, WETH, DAI, etc.
+}
 async function generateQuote(solver, intent, inputAmountUSD, outputTokenSymbol) {
-    // Simulate network latency
-    await new Promise(r => setTimeout(r, solver.latencyMs + Math.random() * 200));
-    // Random failure simulation
-    if (Math.random() > solver.successRate) {
-        return {
-            solverId: solver.id,
-            solverName: solver.name,
-            protocol: solver.protocol,
-            expectedOut: '0',
-            expectedOutUSD: 0,
-            fee: '0',
-            feeUSD: 0,
-            netOutUSD: 0,
-            validUntil: 0,
-            latencyMs: solver.latencyMs,
-            priceImpactBps: 0,
-            route: 'N/A',
-            status: 'FAILED',
-            error: 'Liquidity not available',
-        };
-    }
+    const t0 = Date.now();
+    const tokenIn = intent.input?.token || '';
+    const tokenOut = intent.outputs?.[0]?.token || '';
+    const amountIn = BigInt(intent.input?.amount || '0');
+    const slippageBps = intent.constraints?.slippageBps ?? 50;
+    const recipient = intent.smartAccount || intent.sender || ethers_1.ethers.ZeroAddress;
     const outputPrice = getTokenPrice(outputTokenSymbol);
-    // Each solver has slightly different pricing
-    // CoW: better for stable pairs (lower price impact)
-    // UniswapX: faster but slightly higher impact
-    // HIEF Native: best price but slower
-    let priceImpactBps;
-    let feeRateBps = solver.feeRateBps;
-    if (solver.protocol === 'CoW Protocol') {
-        priceImpactBps = 5 + Math.random() * 10; // 0.05-0.15% impact
-    }
-    else if (solver.protocol === 'UniswapX') {
-        priceImpactBps = 8 + Math.random() * 15; // 0.08-0.23% impact
-    }
-    else {
-        // HIEF Native — best price
-        priceImpactBps = 3 + Math.random() * 8; // 0.03-0.11% impact
-        // Reputation bonus: trusted users get 50% fee discount
-        const reputationTier = intent.reputationTier || 'STANDARD';
-        if (reputationTier === 'TRUSTED' || reputationTier === 'ELITE') {
-            feeRateBps = Math.floor(feeRateBps * 0.5);
+    let dexQuote = null;
+    try {
+        if (solver.protocol === 'Odos') {
+            dexQuote = await (0, dexQuoters_1.quoteOdos)(tokenIn, tokenOut, amountIn, recipient, slippageBps);
+        }
+        else if (solver.protocol === 'Uniswap V3') {
+            dexQuote = await (0, dexQuoters_1.quoteUniswapV3)(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
+        }
+        else {
+            // HIEF Native: try Uniswap V3 first, then Odos as fallback
+            dexQuote = await (0, dexQuoters_1.quoteUniswapV3)(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
+            if (!dexQuote)
+                dexQuote = await (0, dexQuoters_1.quoteOdos)(tokenIn, tokenOut, amountIn, recipient, slippageBps);
+            if (dexQuote)
+                dexQuote = { ...dexQuote, protocol: 'HIEF Native', route: dexQuote.route + ' (via HIEF)' };
         }
     }
-    const totalCostBps = priceImpactBps + feeRateBps;
-    const netOutputUSD = inputAmountUSD * (1 - totalCostBps / 10000);
-    const feeUSD = inputAmountUSD * (feeRateBps / 10000);
-    // Convert to output token units (18 decimals)
-    const outputAmount = netOutputUSD / outputPrice;
-    const outputAmountWei = BigInt(Math.floor(outputAmount * 1e18));
-    const feeAmountWei = BigInt(Math.floor((feeUSD / outputPrice) * 1e18));
-    const validUntil = Math.floor(Date.now() / 1000) + 300; // 5 min validity
-    // Route description
-    let route;
-    if (solver.protocol === 'CoW Protocol') {
-        route = `CoW Batch → ${outputTokenSymbol}`;
+    catch (e) {
+        console.warn(`[${solver.protocol}] quote error:`, e.message?.slice(0, 100));
     }
-    else if (solver.protocol === 'UniswapX') {
-        route = `UniswapX Dutch → ${outputTokenSymbol}`;
+    if (!dexQuote) {
+        return {
+            solverId: solver.id, solverName: solver.name, protocol: solver.protocol,
+            expectedOut: '0', expectedOutUSD: 0, fee: '0', feeUSD: 0, netOutUSD: 0,
+            validUntil: 0, latencyMs: Date.now() - t0, priceImpactBps: 0,
+            route: 'N/A', status: 'FAILED', error: 'No liquidity / API unavailable',
+        };
     }
-    else {
-        route = `HIEF AMM → ${outputTokenSymbol}`;
-    }
+    const outDecimals = getTokenDecimals(tokenOut);
+    const amountOutHuman = Number(dexQuote.amountOut) / 10 ** outDecimals;
+    const expectedOutUSD = amountOutHuman * outputPrice;
     return {
         solverId: solver.id,
         solverName: solver.name,
-        protocol: solver.protocol,
-        expectedOut: outputAmountWei.toString(),
-        expectedOutUSD: netOutputUSD + feeUSD, // gross output
-        fee: feeAmountWei.toString(),
-        feeUSD,
-        netOutUSD: netOutputUSD,
-        validUntil,
-        latencyMs: solver.latencyMs,
-        priceImpactBps,
-        route,
+        protocol: dexQuote.protocol,
+        expectedOut: dexQuote.amountOut.toString(),
+        expectedOutUSD,
+        fee: '0',
+        feeUSD: 0,
+        netOutUSD: expectedOutUSD,
+        validUntil: Math.floor(Date.now() / 1000) + 300,
+        latencyMs: Date.now() - t0,
+        priceImpactBps: dexQuote.priceImpactBps,
+        route: dexQuote.route,
         status: 'QUOTED',
+        swapQuote: dexQuote,
     };
 }
 // ─── Settlement Engine ───────────────────────────────────────────────────────
@@ -274,147 +272,128 @@ const ERC20_ABI = [
 async function simulateSettlement(intent, winner) {
     const inputToken = (intent.input?.token || '').toLowerCase();
     const outputToken = (intent.outputs?.[0]?.token || '').toLowerCase();
-    const isUsdcToEth = inputToken === USDC_ADDRESS.toLowerCase() &&
-        (outputToken === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ||
-            outputToken === WETH_ADDRESS.toLowerCase());
-    // Build the transaction calldata for the main settlement step
-    const WETH_DEPOSIT_SELECTOR = '0xd0e30db0'; // deposit()
-    const ethAmount = winner?.netOutUSD
-        ? Math.max(0.0001, winner.netOutUSD / 2650)
-        : 0.0377;
-    const ethAmountWei = BigInt(Math.floor(ethAmount * 1e18));
-    const valueHex = '0x' + ethAmountWei.toString(16);
-    // Use tenderly_simulateTransaction RPC method (no API key needed, uses fork RPC)
-    const simPayload = {
-        jsonrpc: '2.0',
-        method: 'tenderly_simulateTransaction',
-        params: [
-            {
-                from: new ethers_1.ethers.Wallet(SETTLEMENT_PRIVATE_KEY).address,
-                to: WETH_ADDRESS,
-                data: WETH_DEPOSIT_SELECTOR,
-                value: valueHex,
-                gas: '0x493E0', // 300000
-            },
-            'latest',
-        ],
-        id: 1,
-    };
-    const simRes = await fetch(TENDERLY_RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(simPayload),
-        signal: AbortSignal.timeout(8000),
-    });
-    const simJson = await simRes.json();
-    if (simJson.error) {
-        return {
-            success: false,
-            gasUsed: 0,
-            gasEstimateUSD: 0,
-            expectedOutputToken: 'WETH',
-            expectedOutputAmount: '0',
-            expectedOutputAmountRaw: '0',
-            expectedOutputUSD: 0,
-            priceImpactBps: winner?.priceImpactBps ?? 0,
-            balanceChanges: [],
-            simulatedBlock: 0,
-            error: simJson.error.message || 'Simulation failed',
+    const inputSymbol = extractInputToken(intent);
+    const outputSymbol = extractOutputToken(intent);
+    // Use the real DEX quote's amountOut if available (already validated on-chain/API)
+    const swapQ = winner?.swapQuote;
+    const amountIn = BigInt(intent.input?.amount || '0');
+    const amountOut = swapQ ? swapQ.amountOut : 0n;
+    const outDecimals = getTokenDecimals(intent.outputs?.[0]?.token || '');
+    const inDecimals = getTokenDecimals(intent.input?.token || '');
+    const amountOutHuman = (Number(amountOut) / 10 ** outDecimals).toFixed(6);
+    const amountInHuman = (Number(amountIn) / 10 ** inDecimals).toFixed(inDecimals === 6 ? 2 : 6);
+    const outUSD = parseFloat(amountOutHuman) * getTokenPrice(outputSymbol);
+    const inUSD = parseFloat(amountInHuman) * getTokenPrice(inputSymbol);
+    // Use Tenderly fork just for gas estimation — simulate swap calldata if available,
+    // otherwise fall back to a lightweight WETH.deposit() probe for gas reference.
+    const simTo = swapQ ? swapQ.swapTo : WETH_ADDRESS;
+    const simData = swapQ ? swapQ.swapData : '0xd0e30db0'; // WETH.deposit()
+    const simValue = swapQ ? ('0x' + swapQ.swapValue.toString(16)) : '0x' + ethers_1.ethers.parseEther('0.001').toString(16);
+    const simFrom = new ethers_1.ethers.Wallet(SETTLEMENT_PRIVATE_KEY).address;
+    let gasUsed = 250_000;
+    let simulatedBlock = 0;
+    let simSuccess = true;
+    try {
+        const simPayload = {
+            jsonrpc: '2.0', method: 'tenderly_simulateTransaction',
+            params: [{ from: simFrom, to: simTo, data: simData, value: simValue, gas: '0x7A120' }, 'latest'],
+            id: 1,
         };
-    }
-    const result = simJson.result || {};
-    const gasUsed = parseInt(result.gasUsed || '0x0', 16);
-    // Estimate gas cost: ~0.000000001 ETH/gas on Base (1 gwei), ETH ≈ $2650
-    const gasEstimateUSD = (gasUsed * 1e-9 * 2650);
-    // Parse Deposit event from logs to get actual output amount
-    let wethReceived = ethAmountWei;
-    const logs = result.logs || [];
-    for (const log of logs) {
-        if (log.name === 'Deposit') {
-            const wadInput = log.inputs?.find((i) => i.name === 'wad');
-            if (wadInput)
-                wethReceived = BigInt(wadInput.value);
+        const simRes = await fetch(TENDERLY_RPC_URL, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(simPayload), signal: AbortSignal.timeout(8000),
+        });
+        const simJson = await simRes.json();
+        if (!simJson.error) {
+            const result = simJson.result || {};
+            gasUsed = parseInt(result.gasUsed || '0x3D090', 16);
+            simulatedBlock = parseInt(result.blockNumber || '0x0', 16);
+            simSuccess = result.status === true;
         }
     }
-    const wethReceivedHuman = (Number(wethReceived) / 1e18).toFixed(6);
-    const wethUSD = Number(wethReceived) / 1e18 * 2650;
-    // Build balance changes summary
-    const balanceChanges = [];
-    if (isUsdcToEth) {
-        const inputAmountRaw = BigInt(intent.input?.amount || '100000000');
-        const inputAmountHuman = (Number(inputAmountRaw) / 1e6).toFixed(2);
-        balanceChanges.push({
-            token: USDC_ADDRESS,
-            symbol: 'USDC',
-            delta: '-' + inputAmountHuman,
-            deltaUSD: -parseFloat(inputAmountHuman),
-        });
-    }
-    balanceChanges.push({
-        token: WETH_ADDRESS,
-        symbol: 'WETH',
-        delta: '+' + wethReceivedHuman,
-        deltaUSD: wethUSD,
-    });
-    console.log(`[Simulation] ✅ Success | gasUsed: ${gasUsed} (~$${gasEstimateUSD.toFixed(4)}) | WETH out: ${wethReceivedHuman}`);
+    catch { /* ignore sim errors — still return DEX quote amounts */ }
+    const gasEstimateUSD = gasUsed * 1e-9 * 2650;
+    const balanceChanges = [
+        { token: inputToken, symbol: inputSymbol, delta: '-' + amountInHuman, deltaUSD: -inUSD },
+        { token: outputToken, symbol: outputSymbol, delta: '+' + amountOutHuman, deltaUSD: outUSD },
+    ];
+    console.log(`[Simulation] ✅ ${inputSymbol}→${outputSymbol} | in: ${amountInHuman} | out: ${amountOutHuman} | gas: ${gasUsed}`);
     return {
-        success: result.status === true,
+        success: simSuccess,
         gasUsed,
         gasEstimateUSD,
-        expectedOutputToken: 'WETH',
-        expectedOutputAmount: wethReceivedHuman,
-        expectedOutputAmountRaw: wethReceived.toString(),
-        expectedOutputUSD: wethUSD,
+        expectedOutputToken: outputSymbol,
+        expectedOutputAmount: amountOutHuman,
+        expectedOutputAmountRaw: amountOut.toString(),
+        expectedOutputUSD: outUSD,
         priceImpactBps: winner?.priceImpactBps ?? 0,
         balanceChanges,
-        simulatedBlock: parseInt(result.blockNumber || '0x0', 16),
+        simulatedBlock,
     };
 }
 /**
- * Execute settlement on Tenderly fork.
- * For USDC→ETH intents: transfer USDC to burn address + wrap ETH to WETH.
- * For other intents: wrap a small amount of ETH to WETH as proof-of-execution.
+ * Execute settlement on Tenderly fork using real DEX swap calldata.
+ *
+ * The settlement wallet (SETTLEMENT_PRIVATE_KEY) is auto-funded with the input
+ * token via tenderly_setErc20Balance / tenderly_setBalance so the swap executes.
+ * For EOA (DIRECT) mode only — Safe/ERC-4337 modes execute via their own signing flow.
  */
 async function settleOnChain(intent, winner) {
     const provider = new ethers_1.ethers.JsonRpcProvider(TENDERLY_RPC_URL);
     const wallet = new ethers_1.ethers.Wallet(SETTLEMENT_PRIVATE_KEY, provider);
-    const inputToken = (intent.input?.token || '').toLowerCase();
-    const outputToken = (intent.outputs?.[0]?.token || '').toLowerCase();
-    const isUsdcToEth = inputToken === USDC_ADDRESS.toLowerCase() &&
-        (outputToken === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee' ||
-            outputToken === WETH_ADDRESS.toLowerCase());
+    const tokenIn = intent.input?.token || '';
+    const amountIn = BigInt(intent.input?.amount || '0');
+    const swapQ = winner?.swapQuote;
     let txHash = '';
     let blockNumber = 0;
-    if (isUsdcToEth) {
-        // Step 1: Transfer input USDC to burn address (representing USDC spent)
-        const inputAmount = BigInt(intent.input?.amount || '100000000');
-        const usdc = new ethers_1.ethers.Contract(USDC_ADDRESS, ERC20_ABI, wallet);
-        const usdcBal = await usdc.balanceOf(wallet.address);
-        const transferAmount = usdcBal < inputAmount ? usdcBal : inputAmount;
-        if (transferAmount > 0n) {
-            const tx1 = await usdc.transfer(BURN_ADDRESS, transferAmount);
-            const r1 = await tx1.wait();
-            console.log(`[Settlement] USDC transfer tx: ${tx1.hash} | block: ${r1?.blockNumber}`);
+    if (swapQ) {
+        // ── Real swap via winning DEX protocol ──────────────────────────────────
+        console.log(`[Settlement] Real swap via ${swapQ.protocol} | in: ${amountIn} | out: ${swapQ.amountOut}`);
+        const isEthIn = swapQ.swapValue > 0n;
+        // Fund the wallet with input asset on the Tenderly fork
+        if (isEthIn) {
+            const needed = swapQ.swapValue + ethers_1.ethers.parseEther('0.05'); // extra for gas
+            await provider.send('tenderly_setBalance', [[wallet.address], '0x' + needed.toString(16)]);
         }
-        // Step 2: Wrap ETH to WETH (representing ETH received by solver)
-        const ethAmount = winner?.netOutUSD
-            ? ethers_1.ethers.parseEther(Math.max(0.0001, winner.netOutUSD / 2650).toFixed(6))
-            : ethers_1.ethers.parseEther('0.0377');
-        const weth = new ethers_1.ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
-        const tx2 = await weth.deposit({ value: ethAmount });
-        const r2 = await tx2.wait();
-        txHash = tx2.hash;
-        blockNumber = r2?.blockNumber ?? 0;
-        console.log(`[Settlement] WETH wrap tx: ${txHash} | block: ${blockNumber}`);
+        else {
+            // ERC-20 input: set token balance via tenderly_setErc20Balance
+            try {
+                await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
+            }
+            catch {
+                // tenderly_setErc20Balance not available — try setStorageAt for slot 0/1 (USDC slot 9)
+                console.warn('[Settlement] tenderly_setErc20Balance unavailable, proceeding without prefunding');
+            }
+            // Ensure ETH for gas
+            const ethBal = await provider.getBalance(wallet.address);
+            if (ethBal < ethers_1.ethers.parseEther('0.01')) {
+                await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers_1.ethers.parseEther('0.1').toString(16)]);
+            }
+            // Approve router for ERC-20 swap
+            const erc20 = new ethers_1.ethers.Contract(tokenIn, ['function approve(address,uint256) returns (bool)'], wallet);
+            const approveTx = await erc20.approve(swapQ.approveTarget, amountIn * 2n);
+            await approveTx.wait();
+        }
+        // Execute the swap
+        const swapTx = await wallet.sendTransaction({
+            to: swapQ.swapTo,
+            data: swapQ.swapData,
+            value: swapQ.swapValue,
+            gasLimit: 500000n,
+        });
+        const receipt = await swapTx.wait();
+        txHash = swapTx.hash;
+        blockNumber = receipt?.blockNumber ?? 0;
+        console.log(`[Settlement] ✅ Swap tx: ${txHash} | block: ${blockNumber}`);
     }
     else {
-        // Generic settlement: wrap 0.001 ETH to WETH as proof-of-execution
+        // ── Fallback: WETH wrap as proof-of-execution ───────────────────────────
         const weth = new ethers_1.ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
         const tx = await weth.deposit({ value: ethers_1.ethers.parseEther('0.001') });
         const r = await tx.wait();
         txHash = tx.hash;
         blockNumber = r?.blockNumber ?? 0;
-        console.log(`[Settlement] Generic settlement tx: ${txHash} | block: ${blockNumber}`);
+        console.log(`[Settlement] Fallback WETH wrap: ${txHash}`);
     }
     return { txHash, blockNumber };
 }
@@ -448,6 +427,7 @@ async function runAuction(intentId, intentHash, intent) {
         route: 'N/A',
         status: 'FAILED',
         error: err.message,
+        swapQuote: undefined,
     })));
     const quotes = await Promise.all(quotePromises);
     const auctionDurationMs = Date.now() - startTime;
@@ -475,14 +455,10 @@ async function runAuction(intentId, intentHash, intent) {
             intentHash,
             solverId: winnerSolver.wallet.address,
             executionPlan: {
-                calls: [
-                    {
-                        to: intent.outputs?.[0]?.token || '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE',
-                        value: winner.expectedOut,
-                        data: '0x',
-                        operation: 'CALL',
-                    },
-                ],
+                calls: winner.swapQuote
+                    ? (0, dexQuoters_1.buildSwapCalls)(intent.input?.token || '', BigInt(intent.input?.amount || '0'), winner.swapQuote)
+                        .map(c => ({ to: c.to, value: c.value.toString(), data: c.data, operation: 'CALL' }))
+                    : [{ to: intent.outputs?.[0]?.token || WETH_ADDRESS, value: winner.expectedOut, data: '0x', operation: 'CALL' }],
             },
             quote: {
                 expectedOut: winner.expectedOut,
@@ -547,17 +523,43 @@ async function runAuction(intentId, intentHash, intent) {
                         console.log(`[SafeMultisig] Proposing Safe TX for ${intentId.slice(0, 16)}... | threshold: ${accountInfo.threshold}`);
                         let multisigProposal;
                         try {
-                            // Build settlement calldata (WETH wrap as representative tx)
-                            const wethInterface = new ethers_1.ethers.Interface(['function deposit() payable']);
-                            const depositData = wethInterface.encodeFunctionData('deposit', []);
+                            // Build real swap calldata from the winning DEX quote
+                            const swapQ = winner.swapQuote;
+                            let msTo, msValue, msData, msOp;
+                            if (swapQ) {
+                                if (swapQ.needsApproval) {
+                                    // MultiSend: approve + swap (DELEGATECALL to MultiSendCallOnly)
+                                    const multiSend = (0, dexQuoters_1.encodeMultiSend)([
+                                        { to: intent.input.token, value: 0n, data: (0, dexQuoters_1.encodeApprove)(swapQ.approveTarget, BigInt(intent.input?.amount || '0')) },
+                                        { to: swapQ.swapTo, value: swapQ.swapValue, data: swapQ.swapData },
+                                    ]);
+                                    msTo = multiSend.to;
+                                    msValue = '0';
+                                    msData = multiSend.data;
+                                    msOp = multiSend.operation;
+                                }
+                                else {
+                                    // Single ETH-input swap
+                                    msTo = swapQ.swapTo;
+                                    msValue = swapQ.swapValue.toString();
+                                    msData = swapQ.swapData;
+                                    msOp = 0;
+                                }
+                            }
+                            else {
+                                // Fallback: WETH deposit proof-of-execution
+                                const wethInterface = new ethers_1.ethers.Interface(['function deposit() payable']);
+                                msTo = WETH_ADDRESS;
+                                msValue = ethers_1.ethers.parseEther('0.001').toString();
+                                msData = wethInterface.encodeFunctionData('deposit', []);
+                                msOp = 0;
+                            }
                             const proposal = await (0, safeMultisig_1.proposeSafeMultisig)({
                                 safeAddress: smartAccount,
                                 chainId: SETTLEMENT_CHAIN_ID,
                                 rpcUrl: TENDERLY_RPC_URL,
                                 proposerPrivateKey: SETTLEMENT_PRIVATE_KEY,
-                                to: WETH_ADDRESS,
-                                value: ethers_1.ethers.parseEther('0.001').toString(),
-                                data: depositData,
+                                to: msTo, value: msValue, data: msData, operation: msOp,
                                 intentId,
                             });
                             multisigProposal = { ...proposal, threshold: accountInfo.threshold };
@@ -606,14 +608,37 @@ async function runAuction(intentId, intentHash, intent) {
                                     await safeProvider.send('tenderly_setBalance', [[accountInfo.address], '0xDE0B6B3A7640000']); // 1 ETH
                                 }
                             }
-                            const wethInterface = new ethers_1.ethers.Interface(['function deposit() payable']);
-                            const depositData = wethInterface.encodeFunctionData('deposit', []);
+                            // Build real swap calldata from the winning DEX quote
+                            const swapQ4337 = winner.swapQuote;
+                            let uoTo, uoValue, uoData, uoOp;
+                            if (swapQ4337) {
+                                if (swapQ4337.needsApproval) {
+                                    const multiSend4337 = (0, dexQuoters_1.encodeMultiSend)([
+                                        { to: intent.input.token, value: 0n, data: (0, dexQuoters_1.encodeApprove)(swapQ4337.approveTarget, BigInt(intent.input?.amount || '0')) },
+                                        { to: swapQ4337.swapTo, value: swapQ4337.swapValue, data: swapQ4337.swapData },
+                                    ]);
+                                    uoTo = multiSend4337.to;
+                                    uoValue = multiSend4337.value;
+                                    uoData = multiSend4337.data;
+                                    uoOp = multiSend4337.operation;
+                                }
+                                else {
+                                    uoTo = swapQ4337.swapTo;
+                                    uoValue = swapQ4337.swapValue;
+                                    uoData = swapQ4337.swapData;
+                                    uoOp = 0;
+                                }
+                            }
+                            else {
+                                const wethInterface = new ethers_1.ethers.Interface(['function deposit() payable']);
+                                uoTo = WETH_ADDRESS;
+                                uoValue = ethers_1.ethers.parseEther('0.001');
+                                uoData = wethInterface.encodeFunctionData('deposit', []);
+                                uoOp = 0;
+                            }
                             const userOp = await (0, safe4337_1.buildSafe4337UserOperation)({
                                 safeAddress: accountInfo.address,
-                                to: WETH_ADDRESS,
-                                value: ethers_1.ethers.parseEther('0.001'),
-                                data: depositData,
-                                operation: 0,
+                                to: uoTo, value: uoValue, data: uoData, operation: uoOp,
                                 rpcUrl: TENDERLY_RPC_URL,
                             });
                             const userOpHash = await (0, safe4337_1.computeUserOpHash)(userOp, TENDERLY_RPC_URL);

@@ -144,15 +144,15 @@ async function detectAccountMode(address, rpcUrl, chainId) {
 }
 // ─── Safe Transaction Builder ─────────────────────────────────────────────────
 /**
- * Build a minimal Safe transaction for a WETH-wrap (ETH→WETH) settlement.
- * In production this would be built from the winning solver's ExecutionPlan.
+ * Build a Safe transaction data object.
+ * operation=0 for regular CALL, operation=1 for DELEGATECALL (used with MultiSend).
  */
-function buildSafeTxData(to, value, data, nonce) {
+function buildSafeTxData(to, value, data, nonce, operation = 0) {
     return {
         to,
         value,
         data,
-        operation: 0, // CALL
+        operation,
         safeTxGas: '0',
         baseGas: '0',
         gasPrice: '0',
@@ -196,13 +196,14 @@ function computeSafeTxHash(safeTx, safeAddress, chainId) {
  */
 async function proposeSafeMultisig(params) {
     const { safeAddress, chainId, rpcUrl, proposerPrivateKey, to, value, data, intentId } = params;
+    const operation = params.operation ?? 0;
     const provider = new ethers_1.ethers.JsonRpcProvider(rpcUrl);
     const proposerWallet = new ethers_1.ethers.Wallet(proposerPrivateKey, provider);
     const safeContract = new ethers_1.ethers.Contract(safeAddress, SAFE_ABI, provider);
     // Fetch current nonce from Safe contract
     const nonce = Number(await safeContract.nonce());
     // Build Safe transaction
-    const safeTx = buildSafeTxData(to, value, data, nonce);
+    const safeTx = buildSafeTxData(to, value, data, nonce, operation);
     // Compute EIP-712 hash
     const safeTxHash = computeSafeTxHash(safeTx, safeAddress, chainId);
     // Sign using EIP-712 signTypedData (v=27/28) — required by this Safe contract.
