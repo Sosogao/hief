@@ -904,6 +904,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// BigInt-safe JSON serializer — replaces bigint values with their decimal string representation
+app.set('json replacer', (_key: string, value: unknown) =>
+  typeof value === 'bigint' ? value.toString() : value
+);
+
 app.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
