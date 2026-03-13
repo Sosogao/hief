@@ -1075,17 +1075,28 @@ async function executeSettlement(intentId, isMultisig, isERC4337, isSafe4337) {
         container.scrollTop = container.scrollHeight;
         setTimeout(loadStats, 1500);
       } else {
-        // ─── DIRECT: Show tx hash ────────────────────────────────────────────────────────────────────────────
+        // ─── DIRECT: Show approve tx (if any) + main tx hash ─────────────────────────────────────────────────
         var txHash = d.txHash;
         var blockNum = d.blockNumber;
+        var approveTxHash = d.approveTxHash;
         var shortTx = txHash.slice(0,10)+'...'+txHash.slice(-8);
         var tenderlyUrl = 'https://dashboard.tenderly.co/tx/'+txHash;
         if (btn) { btn.textContent = '✅ Executed!'; btn.style.background = '#1a3a2a'; }
         appendChatMessage('system', '✅ EXECUTED on-chain! Block #'+blockNum);
         var container = document.getElementById('chatMessages');
+        // Show approve tx row if present
+        if (approveTxHash) {
+          var shortApprove = approveTxHash.slice(0,10)+'...'+approveTxHash.slice(-8);
+          var approveUrl = 'https://dashboard.tenderly.co/tx/'+approveTxHash;
+          var approveDiv = document.createElement('div');
+          approveDiv.className = 'flex gap-3';
+          approveDiv.innerHTML = '<div class="w-7 h-7 rounded-full bg-yellow-900 flex items-center justify-center text-xs font-bold flex-shrink-0">⚙</div><div class="flex-1 max-w-lg"><div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-xs font-mono text-yellow-400 bg-yellow-900/20">Step 1 — Approve: <a href="'+approveUrl+'" target="_blank" class="text-yellow-300 hover:underline">'+shortApprove+'</a></div></div>';
+          container.appendChild(approveDiv);
+        }
         var linkDiv = document.createElement('div');
         linkDiv.className = 'flex gap-3';
-        linkDiv.innerHTML = '<div class="w-7 h-7 rounded-full bg-green-900 flex items-center justify-center text-xs font-bold flex-shrink-0">⚙</div><div class="flex-1 max-w-lg"><div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-xs font-mono text-green-400 bg-green-900/20">TX: <a href="'+tenderlyUrl+'" target="_blank" class="text-green-300 hover:underline">'+shortTx+'</a></div></div>';
+        var stepLabel = approveTxHash ? 'Step 2 — Supply: ' : 'TX: ';
+        linkDiv.innerHTML = '<div class="w-7 h-7 rounded-full bg-green-900 flex items-center justify-center text-xs font-bold flex-shrink-0">⚙</div><div class="flex-1 max-w-lg"><div class="glass rounded-2xl rounded-tl-sm px-4 py-3 text-xs font-mono text-green-400 bg-green-900/20">'+stepLabel+'<a href="'+tenderlyUrl+'" target="_blank" class="text-green-300 hover:underline">'+shortTx+'</a></div></div>';
         container.appendChild(linkDiv);
         container.scrollTop = container.scrollHeight;
         setTimeout(loadStats, 1500);

@@ -506,7 +506,7 @@ async function simulateSettlement(
 async function settleOnChain(
   intent: any,
   winner: any
-): Promise<{ txHash: string; blockNumber: number }> {
+): Promise<{ txHash: string; blockNumber: number; approveTxHash?: string }> {
   const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
   const wallet   = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY, provider);
 
@@ -518,6 +518,7 @@ async function settleOnChain(
 
   let txHash = '';
   let blockNumber = 0;
+  let approveTxHash: string | undefined;
 
   if (skillQ) {
     // ── DeFi skill execution (e.g. Aave deposit) ────────────────────────────
@@ -537,11 +538,13 @@ async function settleOnChain(
       if (ethBal < ethers.parseEther('0.01')) {
         await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers.parseEther('0.1').toString(16)]);
       }
-      // Approve if required (e.g. USDC → Aave Pool)
+      // Approve token spending (e.g. USDC → Aave Pool) — surface hash so UI can show it
       if (skillQ.needsApproval) {
         const erc20 = new ethers.Contract(tokenIn, ['function approve(address,uint256) returns (bool)'], wallet);
-        const approveTx = await erc20.approve(skillQ.approveTarget, amountIn);
-        await approveTx.wait();
+        const approveTxObj = await erc20.approve(skillQ.approveTarget, amountIn);
+        const approveReceipt = await approveTxObj.wait();
+        approveTxHash = approveTxObj.hash;
+        console.log(`[Settlement] ✅ Approve tx: ${approveTxHash} | block: ${approveReceipt?.blockNumber}`);
       }
     }
 
@@ -606,7 +609,7 @@ async function settleOnChain(
     console.log(`[Settlement] Fallback WETH wrap: ${txHash}`);
   }
 
-  return { txHash, blockNumber };
+  return { txHash, blockNumber, approveTxHash };
 }
 
 // ─── Auction Engine ───────────────────────────────────────────────────────────
@@ -1479,7 +1482,7 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
     // ─── DIRECT MODE: Broadcast immediately ────────────────────────────────────────────────────
     try {
       console.log(`[Settlement] User confirmed DIRECT execution for ${intentId.slice(0, 16)}... Broadcasting real tx...`);
-      const { txHash, blockNumber } = await settleOnChain(intent, winner);
+      const { txHash, blockNumber, approveTxHash } = await settleOnChain(intent, winner);
       pendingSimulations.delete(intentId);
       await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
         method: 'POST',
@@ -1496,7 +1499,7 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
       }
       res.json({
         success: true,
-        data: { intentId, executionMode: 'DIRECT', txHash, blockNumber, status: 'EXECUTED' },
+        data: { intentId, executionMode: 'DIRECT', txHash, blockNumber, status: 'EXECUTED', approveTxHash },
       });
     } catch (err: any) {
       console.error(`[Settlement] ❌ Execution failed: ${err.message}`);
