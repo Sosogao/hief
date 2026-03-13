@@ -14,6 +14,10 @@
  * Port: 3008
  */
 
+// Make BigInt JSON-serializable globally — converts to decimal string
+// Must be set before any JSON.stringify call in this process
+(BigInt.prototype as any).toJSON = function () { return this.toString(); };
+
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { ethers } from 'ethers';
