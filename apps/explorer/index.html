@@ -322,7 +322,7 @@
       <div class="glass rounded-2xl p-4 mb-4 flex flex-wrap gap-3 items-center">
         <div class="flex items-center gap-2">
           <span class="text-xs text-slate-500">Wallet:</span>
-          <input id="chatWallet" type="text" value="0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white font-mono w-80" placeholder="0x..." />
+          <input id="chatWallet" type="text" value="0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white font-mono w-80" placeholder="0x..." oninput="checkSessionWalletMismatch(this.value.trim())" />
         </div>
         <div class="flex items-center gap-2 ml-auto">
           <span class="text-xs text-slate-500">Session:</span>
@@ -330,6 +330,13 @@
           <span id="chatSessionStatus" class="text-xs text-slate-500">Not started</span>
           <button onclick="startChatSession()" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs">New Session</button>
         </div>
+      </div>
+      <!-- Session Wallet Mismatch Warning -->
+      <div id="sessionMismatchWarning" class="hidden mb-3 flex items-center gap-3 px-4 py-3 rounded-xl" style="background:rgba(234,179,8,0.12);border:1px solid rgba(234,179,8,0.35);">
+        <span style="font-size:18px;">⚠️</span>
+        <div class="flex-1 text-xs text-yellow-300" id="sessionMismatchText"></div>
+        <button onclick="startChatSession()" class="flex-shrink-0 px-3 py-1.5 text-xs font-semibold rounded-lg text-white" style="background:#d97706;">Start New Session</button>
+        <button onclick="document.getElementById('sessionMismatchWarning').classList.add('hidden')" class="flex-shrink-0 text-yellow-500 hover:text-yellow-300 text-lg leading-none">&times;</button>
       </div>
       <!-- Chat Messages -->
       <div id="chatMessages" class="glass rounded-2xl p-4 mb-4 space-y-3" style="min-height:380px;max-height:520px;overflow-y:auto">
@@ -411,6 +418,7 @@ const TABS = ['search','intents','activity','leaderboard','chat'];
 
 // ─── Chat State ───────────────────────────────────────────────────────────────
 var chatSessionId = null;
+var chatSessionWallet = null;
 var chatPendingIntent = null;
 var chatPendingSessionState = null;
 
@@ -699,12 +707,28 @@ async function startChatSession(retryCount) {
     var json = await res.json();
     if (!res.ok) { showError('Failed to start session: '+(json.message||json.error||'unknown')); return; }
     chatSessionId = json.sessionId;
+    chatSessionWallet = wallet;
     document.getElementById('chatSessionId').textContent = chatSessionId.slice(0,12)+'...';
     document.getElementById('chatSessionId').title = chatSessionId;
     document.getElementById('chatSessionStatus').textContent = 'Active';
     document.getElementById('chatSessionStatus').style.color = '#4ade80';
+    document.getElementById('sessionMismatchWarning').classList.add('hidden');
     appendChatMessage('system', 'Session started. Wallet: '+wallet.slice(0,8)+'...'+wallet.slice(-4)+' | Chain: '+CHAIN_ID);
   } catch(e) { showError('Agent service is starting up — please wait a few seconds and try again.'); }
+}
+
+function checkSessionWalletMismatch(newAddress) {
+  var warning = document.getElementById('sessionMismatchWarning');
+  if (!warning) return;
+  if (chatSessionId && chatSessionWallet && newAddress && newAddress.toLowerCase() !== chatSessionWallet.toLowerCase()) {
+    document.getElementById('sessionMismatchText').textContent =
+      'Session was started with ' + chatSessionWallet.slice(0,8)+'...'+chatSessionWallet.slice(-4)
+      + ' but current wallet is ' + newAddress.slice(0,8)+'...'+newAddress.slice(-4)
+      + '. Intents will be submitted using the session wallet. Start a new session to switch wallets.';
+    warning.classList.remove('hidden');
+  } else {
+    warning.classList.add('hidden');
+  }
 }
 
 function setChatInput(text) {
@@ -1553,6 +1577,7 @@ function selectTestWallet(address, type) {
   // Also set in the AI chat wallet input
   var chatWalletInput = document.getElementById('chatWallet');
   if (chatWalletInput) chatWalletInput.value = address;
+  checkSessionWalletMismatch(address);
   // Highlight selected card
   document.querySelectorAll('.wallet-card').forEach(function(c) { c.classList.remove('selected'); });
   event && event.currentTarget && event.currentTarget.classList.add('selected');
@@ -1688,6 +1713,7 @@ function useCreatedWallet(address) {
   document.getElementById('addressInput').value = address;
   var chatWalletInput = document.getElementById('chatWallet');
   if (chatWalletInput) chatWalletInput.value = address;
+  checkSessionWalletMismatch(address);
   hideCreateWalletPanel();
   document.getElementById('addressInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
   lookupAddress();

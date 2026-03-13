@@ -8,6 +8,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ## [Unreleased]
 
 ### Added
+- **Session/wallet mismatch warning** in AI DeFi Agent — when the active wallet address differs from the session's wallet, a yellow warning banner is shown with a "Start New Session" button; triggered on test wallet selection, created wallet selection, and manual chatWallet input edits
 - **Test Wallets Panel** in Explorer UI — three pre-configured accounts covering all execution modes
 - **Tenderly Fork Config Panel** in Explorer UI — display and edit RPC URL + Chain ID at runtime
 - **`ENABLE_TENDERLY_AUTOFUND` guard** — auto-fund is now opt-in via environment variable
