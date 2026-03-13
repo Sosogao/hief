@@ -12,7 +12,8 @@ const ethers_1 = require("ethers");
 // ─── Zod schema for LLM output validation ─────────────────────────────────────
 const ParseResultSchema = zod_1.z.object({
     intentType: zod_1.z.enum([
-        'SWAP', 'BRIDGE', 'PROVIDE_LIQUIDITY', 'REMOVE_LIQUIDITY',
+        'SWAP', 'DEPOSIT', 'WITHDRAW',
+        'BRIDGE', 'PROVIDE_LIQUIDITY', 'REMOVE_LIQUIDITY',
         'STAKE', 'UNSTAKE', 'UNKNOWN',
     ]),
     confidence: zod_1.z.number().min(0).max(1),
@@ -88,9 +89,9 @@ class IntentParser {
         if (parseResult.clarificationNeeded || parseResult.intentType === 'UNKNOWN') {
             return { parseResult, resolveErrors };
         }
-        // Only SWAP is fully supported in MVP
-        if (parseResult.intentType !== 'SWAP') {
-            resolveErrors.push(`Intent type "${parseResult.intentType}" is not yet supported in MVP. Only SWAP is available.`);
+        // MVP supports: SWAP and DEPOSIT
+        if (parseResult.intentType !== 'SWAP' && parseResult.intentType !== 'DEPOSIT') {
+            resolveErrors.push(`Intent type "${parseResult.intentType}" is not yet supported. Supported: SWAP, DEPOSIT (Aave).`);
             return { parseResult, resolveErrors };
         }
         const { params } = parseResult;
@@ -105,14 +106,31 @@ class IntentParser {
             return { parseResult, resolveErrors };
         }
         // Resolve output token
-        if (!params.outputToken) {
-            resolveErrors.push('Output token is required');
-            return { parseResult, resolveErrors };
+        // For DEPOSIT intents the "output" is the receipt token (aToken).
+        // If not specified, use a placeholder — the solver will fill the real aToken address.
+        const isDeposit = parseResult.intentType === 'DEPOSIT';
+        let outputTokenAddress = '0x0000000000000000000000000000000000000000'; // filled by solver
+        let outputTokenSymbol = isDeposit ? `a${inputTokenInfo.symbol}` : '';
+        if (!isDeposit) {
+            if (!params.outputToken) {
+                resolveErrors.push('Output token is required');
+                return { parseResult, resolveErrors };
+            }
+            const outputTokenInfo = (0, tokenRegistry_1.resolveToken)(params.outputToken, chain);
+            if (!outputTokenInfo) {
+                resolveErrors.push(`Unknown token: "${params.outputToken}" on chain ${chain}`);
+                return { parseResult, resolveErrors };
+            }
+            outputTokenAddress = outputTokenInfo.address;
+            outputTokenSymbol = outputTokenInfo.symbol;
         }
-        const outputTokenInfo = (0, tokenRegistry_1.resolveToken)(params.outputToken, chain);
-        if (!outputTokenInfo) {
-            resolveErrors.push(`Unknown token: "${params.outputToken}" on chain ${chain}`);
-            return { parseResult, resolveErrors };
+        else if (params.outputToken) {
+            // User may specify the protocol token (e.g. "aUSDC") — try to resolve
+            const outputTokenInfo = (0, tokenRegistry_1.resolveToken)(params.outputToken, chain);
+            if (outputTokenInfo) {
+                outputTokenAddress = outputTokenInfo.address;
+                outputTokenSymbol = outputTokenInfo.symbol;
+            }
         }
         // Resolve amount
         if (!params.inputAmount) {
@@ -137,11 +155,14 @@ class IntentParser {
         const deadline = Math.floor(Date.now() / 1000) + deadlineSeconds;
         // Compute slippage
         const slippageBps = params.slippageBps ?? 50;
-        // Compute minimum output (if specified)
+        // Compute minimum output — DEPOSIT is 1:1 so min = input amount; SWAP uses user's spec
         let minOutputRaw = '0';
-        if (params.minOutputAmount) {
+        if (isDeposit) {
+            minOutputRaw = rawInputAmount; // expect at least the same amount back as aTokens
+        }
+        else if (params.minOutputAmount) {
             try {
-                minOutputRaw = (0, tokenRegistry_1.parseAmount)(params.minOutputAmount, outputTokenInfo.decimals);
+                minOutputRaw = (0, tokenRegistry_1.parseAmount)(params.minOutputAmount, inputTokenInfo.decimals);
             }
             catch {
                 // Non-fatal: use 0 as min
@@ -161,12 +182,12 @@ class IntentParser {
             },
             outputs: [
                 {
-                    token: outputTokenInfo.address,
+                    token: outputTokenAddress,
                     minAmount: minOutputRaw,
                 },
             ],
             constraints: {
-                slippageBps,
+                slippageBps: isDeposit ? 0 : slippageBps, // deposits are 1:1, no slippage
             },
             priorityFee: { token: 'HIEF', amount: '0' },
             policyRef: { policyVersion: 'v0.1' },
@@ -177,12 +198,12 @@ class IntentParser {
             },
             meta: {
                 userIntentText: userMessage,
-                tags: [parseResult.intentType, inputTokenInfo.symbol, outputTokenInfo.symbol],
+                tags: [parseResult.intentType, inputTokenInfo.symbol, outputTokenSymbol],
                 uiHints: {
                     inputTokenSymbol: inputTokenInfo.symbol,
-                    outputTokenSymbol: outputTokenInfo.symbol,
+                    outputTokenSymbol,
                     inputAmountHuman: params.inputAmount,
-                    protocol: params.protocol ?? 'auto',
+                    protocol: params.protocol ?? (isDeposit ? 'aave' : 'auto'),
                 },
             },
         };

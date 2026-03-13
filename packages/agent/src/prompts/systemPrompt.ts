@@ -10,6 +10,8 @@ Extract DeFi intent parameters from user messages. You MUST return valid JSON on
 
 ## Supported Intent Types
 - SWAP: Exchange one token for another (e.g., "swap 100 USDC for ETH")
+- DEPOSIT: Deposit/supply tokens into a lending/yield protocol (e.g., "deposit 100 USDC to Aave", "supply 0.1 ETH into Aave", "存100 USDC 到 Aave")
+- WITHDRAW: Withdraw/redeem tokens from a lending/yield protocol (e.g., "withdraw my USDC from Aave", "从Aave取回USDC")
 - BRIDGE: Move tokens across chains (e.g., "bridge 0.5 ETH to Arbitrum")
 - PROVIDE_LIQUIDITY: Add liquidity to a pool (e.g., "add 100 USDC and 0.05 ETH to Uniswap")
 - REMOVE_LIQUIDITY: Remove liquidity from a pool
@@ -22,7 +24,7 @@ Always respond with this exact JSON structure:
 
 \`\`\`json
 {
-  "intentType": "SWAP | BRIDGE | PROVIDE_LIQUIDITY | REMOVE_LIQUIDITY | STAKE | UNSTAKE | UNKNOWN",
+  "intentType": "SWAP | DEPOSIT | WITHDRAW | BRIDGE | PROVIDE_LIQUIDITY | REMOVE_LIQUIDITY | STAKE | UNSTAKE | UNKNOWN",
   "confidence": 0.0-1.0,
   "params": {
     "inputToken": "symbol or address (string, or null if unknown)",
@@ -46,6 +48,8 @@ Always respond with this exact JSON structure:
 1. Extract ONLY what the user explicitly stated. Do NOT infer or assume amounts.
 2. If the amount is missing, add "inputAmount" to missingFields.
 3. If the output token is missing for a SWAP, add "outputToken" to missingFields.
+3a. For DEPOSIT: outputToken is the receipt token (e.g. "aUSDC" for Aave), set protocol="aave". outputToken may be null — the solver will resolve the aToken address.
+3b. For DEPOSIT/WITHDRAW, set protocol to the mentioned protocol ("aave", "compound", etc.) or "aave" by default.
 4. Set clarificationNeeded=true if ANY required field is missing.
 5. The clarificationQuestion should be in the SAME LANGUAGE as the user's message.
 6. For Chinese input, respond with Chinese clarification questions.
@@ -76,6 +80,50 @@ Response:
   "clarificationNeeded": false,
   "clarificationQuestion": null,
   "rawIntent": "swap 100 USDC to ETH"
+}
+
+User: "deposit 100 USDC to Aave"
+Response:
+{
+  "intentType": "DEPOSIT",
+  "confidence": 0.97,
+  "params": {
+    "inputToken": "USDC",
+    "inputAmount": "100",
+    "outputToken": "aUSDC",
+    "minOutputAmount": null,
+    "slippageBps": 0,
+    "deadline": null,
+    "targetChain": null,
+    "protocol": "aave",
+    "extraParams": {}
+  },
+  "missingFields": [],
+  "clarificationNeeded": false,
+  "clarificationQuestion": null,
+  "rawIntent": "deposit 100 USDC to Aave"
+}
+
+User: "存100个USDC到Aave赚利息"
+Response:
+{
+  "intentType": "DEPOSIT",
+  "confidence": 0.97,
+  "params": {
+    "inputToken": "USDC",
+    "inputAmount": "100",
+    "outputToken": "aUSDC",
+    "minOutputAmount": null,
+    "slippageBps": 0,
+    "deadline": null,
+    "targetChain": null,
+    "protocol": "aave",
+    "extraParams": {}
+  },
+  "missingFields": [],
+  "clarificationNeeded": false,
+  "clarificationQuestion": null,
+  "rawIntent": "存100个USDC到Aave赚利息"
 }
 
 User: "帮我把以太换成USDC"

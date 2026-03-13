@@ -61,6 +61,7 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const safeMultisig_1 = require("./safeMultisig");
 const dexQuoters_1 = require("./dexQuoters");
+const defiSkills_1 = require("./defiSkills");
 const erc4337_1 = require("./erc4337");
 const safe4337_1 = require("./safe4337");
 // ─── Config ────────────────────────────────────────────────────────────────────
@@ -115,6 +116,17 @@ const SOLVER_PERSONAS = [
         latencyMs: 0,
         successRate: 1,
         specialization: 'fallback',
+    },
+    {
+        id: 'aave-solver-01',
+        name: 'Aave v3',
+        protocol: 'Aave',
+        description: 'Aave v3 lending protocol — earn yield by supplying assets.',
+        wallet: ethers_1.ethers.Wallet.createRandom(),
+        feeRateBps: 0,
+        latencyMs: 0,
+        successRate: 1,
+        specialization: 'deposit',
     },
 ];
 // ─── Token Price Oracle (mock) ─────────────────────────────────────────────────
@@ -183,6 +195,13 @@ function extractInputAmount(intent) {
         return raw / 1e6;
     return raw / 1e18;
 }
+/** Return true if the intent is a DeFi skill (DEPOSIT, STAKE, etc.) rather than a SWAP */
+function isDepositIntent(intent) {
+    const type = intent.meta?.intentType
+        || intent.intentType
+        || intent.meta?.tags?.[0];
+    return type === 'DEPOSIT';
+}
 /** Token decimals for converting raw amounts to human-readable */
 function getTokenDecimals(tokenAddr) {
     const usdc = ['0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
@@ -206,22 +225,80 @@ async function generateQuote(solver, intent, inputAmountUSD, outputTokenSymbol) 
     const amountIn = BigInt(intent.input?.amount || '0');
     const slippageBps = intent.constraints?.slippageBps ?? 50;
     const recipient = intent.smartAccount || intent.sender || ethers_1.ethers.ZeroAddress;
+    const inputPrice = getTokenPrice(extractInputToken(intent));
+    // ── DEPOSIT intent: route to DeFi skill solvers (e.g. Aave) ─────────────────
+    const depositIntent = isDepositIntent(intent);
+    if (depositIntent) {
+        if (solver.protocol !== 'Aave') {
+            // Swap-focused solvers don't handle DEPOSIT — return FAILED
+            return {
+                solverId: solver.id, solverName: solver.name, protocol: solver.protocol,
+                expectedOut: '0', expectedOutUSD: 0, fee: '0', feeUSD: 0, netOutUSD: 0,
+                validUntil: 0, latencyMs: Date.now() - t0, priceImpactBps: 0,
+                route: 'N/A', status: 'FAILED', error: 'Not a deposit solver',
+            };
+        }
+        // Aave deposit quote
+        const skill = await (0, defiSkills_1.quoteAaveDeposit)(tokenIn, amountIn, recipient, TENDERLY_RPC_URL);
+        if (!skill) {
+            return {
+                solverId: solver.id, solverName: solver.name, protocol: 'Aave v3',
+                expectedOut: '0', expectedOutUSD: 0, fee: '0', feeUSD: 0, netOutUSD: 0,
+                validUntil: 0, latencyMs: Date.now() - t0, priceImpactBps: 0,
+                route: 'N/A', status: 'FAILED', error: 'Token not supported on Aave v3',
+            };
+        }
+        const inDecimals = getTokenDecimals(tokenIn);
+        const amountHuman = Number(amountIn) / 10 ** inDecimals;
+        const expectedUSD = amountHuman * inputPrice; // deposits are 1:1
+        return {
+            solverId: solver.id,
+            solverName: solver.name,
+            protocol: 'Aave v3',
+            expectedOut: skill.amountOut.toString(),
+            expectedOutUSD: expectedUSD,
+            fee: '0', feeUSD: 0,
+            netOutUSD: expectedUSD,
+            validUntil: Math.floor(Date.now() / 1000) + 300,
+            latencyMs: Date.now() - t0,
+            priceImpactBps: 0,
+            route: skill.route,
+            status: 'QUOTED',
+            defiSkillQuote: skill,
+        };
+    }
+    // ── SWAP intent: route to DEX solvers ────────────────────────────────────────
     const outputPrice = getTokenPrice(outputTokenSymbol);
     let dexQuote = null;
+    let execQuote = null; // fork-compatible execution quote (always UniV3)
     try {
         if (solver.protocol === 'Odos') {
+            // Odos: use for price discovery (mainnet API), but also get UniV3 for fork execution
             dexQuote = await (0, dexQuoters_1.quoteOdos)(tokenIn, tokenOut, amountIn, recipient, slippageBps);
+            // Always get UniV3 as fork-compatible execution fallback (Odos calldata fails on diverged fork)
+            execQuote = await (0, dexQuoters_1.quoteUniswapV3)(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
         }
         else if (solver.protocol === 'Uniswap V3') {
             dexQuote = await (0, dexQuoters_1.quoteUniswapV3)(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
+            execQuote = dexQuote; // UniV3 is already fork-compatible
+        }
+        else if (solver.protocol === 'Aave') {
+            // Aave doesn't handle swaps
+            return {
+                solverId: solver.id, solverName: solver.name, protocol: solver.protocol,
+                expectedOut: '0', expectedOutUSD: 0, fee: '0', feeUSD: 0, netOutUSD: 0,
+                validUntil: 0, latencyMs: Date.now() - t0, priceImpactBps: 0,
+                route: 'N/A', status: 'FAILED', error: 'Not a swap solver',
+            };
         }
         else {
-            // HIEF Native: try Uniswap V3 first, then Odos as fallback
+            // HIEF Native: try Uniswap V3 first (fork-compatible), then Odos as fallback
             dexQuote = await (0, dexQuoters_1.quoteUniswapV3)(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
             if (!dexQuote)
                 dexQuote = await (0, dexQuoters_1.quoteOdos)(tokenIn, tokenOut, amountIn, recipient, slippageBps);
             if (dexQuote)
                 dexQuote = { ...dexQuote, protocol: 'HIEF Native', route: dexQuote.route + ' (via HIEF)' };
+            execQuote = dexQuote;
         }
     }
     catch (e) {
@@ -253,11 +330,21 @@ async function generateQuote(solver, intent, inputAmountUSD, outputTokenSymbol) 
         route: dexQuote.route,
         status: 'QUOTED',
         swapQuote: dexQuote,
+        execQuote: execQuote ?? dexQuote, // fork execution uses UniV3; fallback to swapQuote
     };
 }
 // ─── Settlement Engine ───────────────────────────────────────────────────────
 // TENDERLY_RPC is an alias for TENDERLY_RPC_URL (kept for backward compat with simulateSettlement)
 // Note: use TENDERLY_RPC_URL (the let variable) for all new code so runtime updates take effect
+/**
+ * Pick the right DexQuote for on-chain execution on the Tenderly fork.
+ * Odos calldata is generated from live mainnet state and will revert on a diverged fork.
+ * UniV3 calldata is generated against the fork's own pool state and always works on fork.
+ * execQuote = UniV3 fallback stored alongside the Odos swapQuote; use it for settlement.
+ */
+function getExecQuote(winner) {
+    return winner.execQuote ?? winner.swapQuote;
+}
 const SETTLEMENT_PRIVATE_KEY = process.env.SETTLEMENT_PRIVATE_KEY ||
     '0xf2be7fd8f35f99b3838c9dc7e1bdbeccaefb9031ebd223a18c1a8e54f5bb780d';
 // Ethereum Mainnet token addresses (used on Tenderly mainnet fork)
@@ -277,21 +364,23 @@ async function simulateSettlement(intent, winner) {
     const outputToken = (intent.outputs?.[0]?.token || '').toLowerCase();
     const inputSymbol = extractInputToken(intent);
     const outputSymbol = extractOutputToken(intent);
-    // Use the real DEX quote's amountOut if available (already validated on-chain/API)
-    const swapQ = winner?.swapQuote;
+    const skillQ = winner?.defiSkillQuote;
+    // Use fork-compatible execution quote for simulation (UniV3 works on fork; Odos may not)
+    const swapQ = skillQ ? undefined : (winner ? getExecQuote(winner) : undefined);
     const amountIn = BigInt(intent.input?.amount || '0');
-    const amountOut = swapQ ? swapQ.amountOut : 0n;
-    const outDecimals = getTokenDecimals(intent.outputs?.[0]?.token || '');
+    const amountOut = skillQ ? skillQ.amountOut : (swapQ ? swapQ.amountOut : 0n);
     const inDecimals = getTokenDecimals(intent.input?.token || '');
+    const outDecimals = skillQ ? inDecimals : getTokenDecimals(intent.outputs?.[0]?.token || '');
     const amountOutHuman = (Number(amountOut) / 10 ** outDecimals).toFixed(6);
     const amountInHuman = (Number(amountIn) / 10 ** inDecimals).toFixed(inDecimals === 6 ? 2 : 6);
-    const outUSD = parseFloat(amountOutHuman) * getTokenPrice(outputSymbol);
+    const effectiveOutputSymbol = skillQ ? skillQ.tokenOutSymbol : outputSymbol;
+    const outUSD = parseFloat(amountOutHuman) * (skillQ ? getTokenPrice(inputSymbol) : getTokenPrice(outputSymbol));
     const inUSD = parseFloat(amountInHuman) * getTokenPrice(inputSymbol);
-    // Use Tenderly fork just for gas estimation — simulate swap calldata if available,
-    // otherwise fall back to a lightweight WETH.deposit() probe for gas reference.
-    const simTo = swapQ ? swapQ.swapTo : WETH_ADDRESS;
-    const simData = swapQ ? swapQ.swapData : '0xd0e30db0'; // WETH.deposit()
-    const simValue = swapQ ? ('0x' + swapQ.swapValue.toString(16)) : '0x' + ethers_1.ethers.parseEther('0.001').toString(16);
+    // Use Tenderly fork just for gas estimation
+    const simTo = skillQ ? skillQ.contractTo : (swapQ ? swapQ.swapTo : WETH_ADDRESS);
+    const simData = skillQ ? skillQ.calldata : (swapQ ? swapQ.swapData : '0xd0e30db0'); // WETH.deposit()
+    const simValueBig = skillQ ? skillQ.value : (swapQ ? swapQ.swapValue : ethers_1.ethers.parseEther('0.001'));
+    const simValue = '0x' + simValueBig.toString(16);
     const simFrom = new ethers_1.ethers.Wallet(SETTLEMENT_PRIVATE_KEY).address;
     let gasUsed = 250_000;
     let simulatedBlock = 0;
@@ -316,16 +405,17 @@ async function simulateSettlement(intent, winner) {
     }
     catch { /* ignore sim errors — still return DEX quote amounts */ }
     const gasEstimateUSD = gasUsed * 1e-9 * 2650;
+    const effectiveOutputToken = skillQ ? skillQ.tokenOut : outputToken;
     const balanceChanges = [
         { token: inputToken, symbol: inputSymbol, delta: '-' + amountInHuman, deltaUSD: -inUSD },
-        { token: outputToken, symbol: outputSymbol, delta: '+' + amountOutHuman, deltaUSD: outUSD },
+        { token: effectiveOutputToken, symbol: effectiveOutputSymbol, delta: '+' + amountOutHuman, deltaUSD: outUSD },
     ];
-    console.log(`[Simulation] ✅ ${inputSymbol}→${outputSymbol} | in: ${amountInHuman} | out: ${amountOutHuman} | gas: ${gasUsed}`);
+    console.log(`[Simulation] ✅ ${inputSymbol}→${effectiveOutputSymbol} | in: ${amountInHuman} | out: ${amountOutHuman} | gas: ${gasUsed}`);
     return {
         success: simSuccess,
         gasUsed,
         gasEstimateUSD,
-        expectedOutputToken: outputSymbol,
+        expectedOutputToken: effectiveOutputSymbol,
         expectedOutputAmount: amountOutHuman,
         expectedOutputAmountRaw: amountOut.toString(),
         expectedOutputUSD: outUSD,
@@ -346,10 +436,49 @@ async function settleOnChain(intent, winner) {
     const wallet = new ethers_1.ethers.Wallet(SETTLEMENT_PRIVATE_KEY, provider);
     const tokenIn = intent.input?.token || '';
     const amountIn = BigInt(intent.input?.amount || '0');
-    const swapQ = winner?.swapQuote;
+    const skillQ = winner?.defiSkillQuote;
+    // Use fork-compatible execution quote (UniV3); Odos calldata uses live mainnet state and reverts on diverged fork
+    const swapQ = skillQ ? undefined : (winner ? getExecQuote(winner) : undefined);
     let txHash = '';
     let blockNumber = 0;
-    if (swapQ) {
+    if (skillQ) {
+        // ── DeFi skill execution (e.g. Aave deposit) ────────────────────────────
+        console.log(`[Settlement] ${skillQ.skill} via ${skillQ.protocol} | in: ${amountIn} → ${skillQ.tokenOutSymbol}`);
+        const isEthIn = skillQ.value > 0n;
+        if (isEthIn) {
+            const needed = skillQ.value + ethers_1.ethers.parseEther('0.05');
+            await provider.send('tenderly_setBalance', [[wallet.address], '0x' + needed.toString(16)]);
+        }
+        else {
+            try {
+                await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
+            }
+            catch {
+                console.warn('[Settlement] tenderly_setErc20Balance unavailable, proceeding without prefunding');
+            }
+            const ethBal = await provider.getBalance(wallet.address);
+            if (ethBal < ethers_1.ethers.parseEther('0.01')) {
+                await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers_1.ethers.parseEther('0.1').toString(16)]);
+            }
+            // Approve if required (e.g. USDC → Aave Pool)
+            if (skillQ.needsApproval) {
+                const erc20 = new ethers_1.ethers.Contract(tokenIn, ['function approve(address,uint256) returns (bool)'], wallet);
+                const approveTx = await erc20.approve(skillQ.approveTarget, amountIn);
+                await approveTx.wait();
+            }
+        }
+        const skillTx = await wallet.sendTransaction({
+            to: skillQ.contractTo,
+            data: skillQ.calldata,
+            value: skillQ.value,
+            gasLimit: 400000n,
+        });
+        const receipt = await skillTx.wait();
+        txHash = skillTx.hash;
+        blockNumber = receipt?.blockNumber ?? 0;
+        console.log(`[Settlement] ✅ ${skillQ.skill} tx: ${txHash} | block: ${blockNumber}`);
+    }
+    else if (swapQ) {
         // ── Real swap via winning DEX protocol ──────────────────────────────────
         console.log(`[Settlement] Real swap via ${swapQ.protocol} | in: ${amountIn} | out: ${swapQ.amountOut}`);
         const isEthIn = swapQ.swapValue > 0n;
@@ -431,6 +560,7 @@ async function runAuction(intentId, intentHash, intent) {
         status: 'FAILED',
         error: err.message,
         swapQuote: undefined,
+        defiSkillQuote: undefined,
     })));
     const quotes = await Promise.all(quotePromises);
     const auctionDurationMs = Date.now() - startTime;
@@ -458,10 +588,13 @@ async function runAuction(intentId, intentHash, intent) {
             intentHash,
             solverId: winnerSolver.wallet.address,
             executionPlan: {
-                calls: winner.swapQuote
-                    ? (0, dexQuoters_1.buildSwapCalls)(intent.input?.token || '', BigInt(intent.input?.amount || '0'), winner.swapQuote)
+                calls: winner.defiSkillQuote
+                    ? (0, defiSkills_1.buildAaveDepositCalls)(winner.defiSkillQuote)
                         .map(c => ({ to: c.to, value: c.value.toString(), data: c.data, operation: 'CALL' }))
-                    : [{ to: intent.outputs?.[0]?.token || WETH_ADDRESS, value: winner.expectedOut, data: '0x', operation: 'CALL' }],
+                    : getExecQuote(winner)
+                        ? (0, dexQuoters_1.buildSwapCalls)(intent.input?.token || '', BigInt(intent.input?.amount || '0'), getExecQuote(winner))
+                            .map(c => ({ to: c.to, value: c.value.toString(), data: c.data, operation: 'CALL' }))
+                        : [{ to: intent.outputs?.[0]?.token || WETH_ADDRESS, value: winner.expectedOut, data: '0x', operation: 'CALL' }],
             },
             quote: {
                 expectedOut: winner.expectedOut,
@@ -526,10 +659,28 @@ async function runAuction(intentId, intentHash, intent) {
                         console.log(`[SafeMultisig] Proposing Safe TX for ${intentId.slice(0, 16)}... | threshold: ${accountInfo.threshold}`);
                         let multisigProposal;
                         try {
-                            // Build real swap calldata from the winning DEX quote
-                            const swapQ = winner.swapQuote;
+                            // Build calldata: DeFi skill (Aave) or swap (UniV3)
+                            const skillQMs = winner.defiSkillQuote;
+                            const swapQ = skillQMs ? undefined : getExecQuote(winner);
                             let msTo, msValue, msData, msOp;
-                            if (swapQ) {
+                            if (skillQMs) {
+                                // DeFi skill: approve + supply via MultiSend if needed
+                                const calls = (0, defiSkills_1.buildAaveDepositCalls)(skillQMs);
+                                if (calls.length > 1) {
+                                    const multiSend = (0, dexQuoters_1.encodeMultiSend)(calls);
+                                    msTo = multiSend.to;
+                                    msValue = '0';
+                                    msData = multiSend.data;
+                                    msOp = multiSend.operation;
+                                }
+                                else {
+                                    msTo = calls[0].to;
+                                    msValue = calls[0].value.toString();
+                                    msData = calls[0].data;
+                                    msOp = 0;
+                                }
+                            }
+                            else if (swapQ) {
                                 if (swapQ.needsApproval) {
                                     // MultiSend: approve + swap (DELEGATECALL to MultiSendCallOnly)
                                     const multiSend = (0, dexQuoters_1.encodeMultiSend)([
@@ -542,7 +693,6 @@ async function runAuction(intentId, intentHash, intent) {
                                     msOp = multiSend.operation;
                                 }
                                 else {
-                                    // Single ETH-input swap
                                     msTo = swapQ.swapTo;
                                     msValue = swapQ.swapValue.toString();
                                     msData = swapQ.swapData;
@@ -611,10 +761,27 @@ async function runAuction(intentId, intentHash, intent) {
                                     await safeProvider.send('tenderly_setBalance', [[accountInfo.address], '0xDE0B6B3A7640000']); // 1 ETH
                                 }
                             }
-                            // Build real swap calldata from the winning DEX quote
-                            const swapQ4337 = winner.swapQuote;
+                            // Build calldata: DeFi skill (Aave) or swap (UniV3)
+                            const skillQ4337 = winner.defiSkillQuote;
+                            const swapQ4337 = skillQ4337 ? undefined : getExecQuote(winner);
                             let uoTo, uoValue, uoData, uoOp;
-                            if (swapQ4337) {
+                            if (skillQ4337) {
+                                const calls = (0, defiSkills_1.buildAaveDepositCalls)(skillQ4337);
+                                if (calls.length > 1) {
+                                    const ms = (0, dexQuoters_1.encodeMultiSend)(calls);
+                                    uoTo = ms.to;
+                                    uoValue = ms.value;
+                                    uoData = ms.data;
+                                    uoOp = ms.operation;
+                                }
+                                else {
+                                    uoTo = calls[0].to;
+                                    uoValue = calls[0].value;
+                                    uoData = calls[0].data;
+                                    uoOp = 0;
+                                }
+                            }
+                            else if (swapQ4337) {
                                 if (swapQ4337.needsApproval) {
                                     const multiSend4337 = (0, dexQuoters_1.encodeMultiSend)([
                                         { to: intent.input.token, value: 0n, data: (0, dexQuoters_1.encodeApprove)(swapQ4337.approveTarget, BigInt(intent.input?.amount || '0')) },

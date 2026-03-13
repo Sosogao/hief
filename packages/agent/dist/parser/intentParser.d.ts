@@ -1,5 +1,5 @@
 import type { HIEFIntent } from '@hief/common';
-export type IntentType = 'SWAP' | 'BRIDGE' | 'PROVIDE_LIQUIDITY' | 'REMOVE_LIQUIDITY' | 'STAKE' | 'UNSTAKE' | 'UNKNOWN';
+export type IntentType = 'SWAP' | 'DEPOSIT' | 'WITHDRAW' | 'BRIDGE' | 'PROVIDE_LIQUIDITY' | 'REMOVE_LIQUIDITY' | 'STAKE' | 'UNSTAKE' | 'UNKNOWN';
 export interface ParsedIntentParams {
     inputToken: string | null;
     inputAmount: string | null;

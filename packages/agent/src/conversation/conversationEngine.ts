@@ -340,12 +340,27 @@ export class ConversationEngine {
     slippage: string,
     chain: string
   ): string {
+    const uiHints = (intent.meta?.uiHints ?? {}) as Record<string, string>;
+    const protocol = uiHints.protocol ?? 'auto';
+    const isDeposit = protocol === 'aave' || outputSymbol.startsWith('a');
+
+    if (isDeposit) {
+      return `📋 **Transaction Summary**
+
+💰 Deposit **${inputAmountHuman} ${inputSymbol}** → **${outputSymbol}** (Aave v3)
+🌐 Network: ${chain}
+📈 Earn yield — no slippage, 1:1 ratio
+🏦 Protocol: Aave v3 (lending & borrowing)
+
+Reply **yes** to confirm or **no** to cancel.`;
+    }
+
     return `📋 **Transaction Summary**
 
 🔄 Swap **${inputAmountHuman} ${inputSymbol}** → **${outputSymbol}**
 🌐 Network: ${chain}
 📉 Max slippage: ${slippage}%
-🤝 Protocol: CoW Protocol (best price)
+🤝 Protocol: Best available DEX (Odos / Uniswap V3)
 
 Reply **yes** to confirm or **no** to cancel.`;
   }
@@ -355,13 +370,26 @@ Reply **yes** to confirm or **no** to cancel.`;
     const inputSymbol = uiHints2.inputTokenSymbol ?? 'tokens';
     const outputSymbol = uiHints2.outputTokenSymbol ?? 'tokens';
     const inputAmountHuman = uiHints2.inputAmountHuman ?? intent.input.amount;
+    const protocol = uiHints2.protocol ?? 'auto';
+    const isDeposit = protocol === 'aave' || outputSymbol.startsWith('a');
+
+    if (isDeposit) {
+      return `✅ **Intent confirmed!**
+
+Your deposit intent has been submitted:
+- **Intent ID**: \`${intent.intentId.slice(0, 16)}...\`
+- **Action**: Deposit ${inputAmountHuman} ${inputSymbol} → ${outputSymbol} (Aave v3)
+- **Status**: Preparing Aave supply transaction...
+
+You'll receive a transaction to sign shortly.`;
+    }
 
     return `✅ **Intent confirmed!**
 
 Your intent has been created and submitted to the HIEF network:
 - **Intent ID**: \`${intent.intentId.slice(0, 16)}...\`
 - **Action**: Swap ${inputAmountHuman} ${inputSymbol} → ${outputSymbol}
-- **Status**: Seeking best execution via CoW Protocol...
+- **Status**: Seeking best execution via DEX solvers...
 
 Solvers are now competing to give you the best price. You'll receive a Safe transaction to sign shortly.`;
   }
