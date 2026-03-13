@@ -1489,6 +1489,18 @@ function renderTestWallets(wallets) {
     var cc = cardClasses[w.type] || 'wallet-card-eoa';
     var color = modeColors[w.type] || '#4ade80';
     var badge = modeBadges[w.type] || '';
+
+    // Wallet needs to be deployed on this fork
+    if (w.needsDeploy) {
+      return '<div class="wallet-card '+cc+'" style="--wc-color:'+color+';opacity:0.85;">'
+        +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">'
+        +'<div style="font-size:22px;">'+w.icon+'</div>'+badge+'</div>'
+        +'<div style="font-size:13px;font-weight:700;color:#f1f5f9;margin-bottom:4px;">'+w.label+'</div>'
+        +'<div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">'+w.description+'</div>'
+        +'<button onclick="showCreateWalletPanel()" style="width:100%;padding:6px;background:rgba(167,139,250,0.15);border:1px solid rgba(167,139,250,0.4);border-radius:8px;color:#a78bfa;font-size:11px;cursor:pointer;font-weight:600;">+ Deploy on this fork</button>'
+        +'</div>';
+    }
+
     var shortAddr = w.address.slice(0,10)+'...'+w.address.slice(-6);
     var balHtml = w.ethBalance && w.ethBalance !== 'N/A'
       ? '<span style="color:'+color+'">'+parseFloat(w.ethBalance).toFixed(4)+' ETH</span>'

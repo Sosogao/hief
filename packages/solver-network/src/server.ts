@@ -1498,17 +1498,15 @@ const TEST_WALLETS = [
   {
     type: 'SAFE_MULTISIG',
     label: 'Safe Multisig Wallet',
-    description: 'Gnosis Safe with 1-of-2 multisig threshold. Intents require co-signer approval before execution.',
-    address: '0xbdB26a0a4DCAdcd16b5B3b0F55f0A85D79280aD1',
+    description: 'Deploy a 2-of-2 Safe (you + AI key, threshold=2) on this fork. The old pre-configured address (0xbdB26...) has Safe4337Module enabled on mainnet and is detected as ERC4337_SAFE, not MULTISIG.',
+    address: '',
+    needsDeploy: true,
     executionMode: 'MULTISIG',
     icon: '🔐',
     color: '#a78bfa',
-    owners: [
-      '0xb5eb16b6dF444c07309fd5f5635BA21Ef30F8cA2',
-      '0x7d73932636FbC0E57448BA175AbCd800C60daE5F',
-    ],
-    threshold: 1,
-    note: 'AI proposes Safe TX. Co-signer must approve via MetaMask.',
+    owners: [],
+    threshold: 2,
+    note: 'Click "Deploy" to create a fresh 2-of-2 Safe on this fork without Safe4337Module.',
   },
   {
     type: 'SAFE_4337',
