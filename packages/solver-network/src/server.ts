@@ -909,6 +909,18 @@ app.set('json replacer', (_key: string, value: unknown) =>
   typeof value === 'bigint' ? value.toString() : value
 );
 
+/** Recursively convert BigInt values to strings for JSON-safe serialization */
+function sanitizeBigInt<T>(obj: T): T {
+  if (typeof obj === 'bigint') return obj.toString() as unknown as T;
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(sanitizeBigInt) as unknown as T;
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(obj as Record<string, unknown>)) {
+    result[key] = sanitizeBigInt((obj as Record<string, unknown>)[key]);
+  }
+  return result as T;
+}
+
 app.get('/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
@@ -965,7 +977,7 @@ app.post('/v1/solver-network/quote', async (req: Request, res: Response) => {
   const quotes = await Promise.all(quotePromises);
   const validQuotes = quotes.filter(q => q.status === 'QUOTED').sort((a, b) => b.netOutUSD - a.netOutUSD);
 
-  res.json({
+  res.json(sanitizeBigInt({
     success: true,
     data: {
       inputToken,
@@ -978,7 +990,7 @@ app.post('/v1/solver-network/quote', async (req: Request, res: Response) => {
         ? ((validQuotes[0].netOutUSD - validQuotes[validQuotes.length - 1].netOutUSD) / validQuotes[validQuotes.length - 1].netOutUSD * 100).toFixed(2) + '%'
         : '0%',
     },
-  });
+  }));
 });
 
 // POST /v1/solver-network/trigger — manually trigger auction for a specific intent
@@ -1021,7 +1033,7 @@ app.post('/v1/solver-network/trigger', async (req: Request, res: Response) => {
     auctionHistory.unshift(result);
     if (auctionHistory.length > 50) auctionHistory.pop();
 
-    res.json({ success: true, data: result });
+    res.json({ success: true, data: sanitizeBigInt(result) });
   } catch (err: any) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -1035,7 +1047,7 @@ app.get('/v1/solver-network/simulation/:intentId', (req: Request, res: Response)
     res.status(404).json({ success: false, error: 'No pending simulation for this intent' });
     return;
   }
-  res.json({
+  res.json(sanitizeBigInt({
     success: true,
     data: {
       intentId,
@@ -1044,7 +1056,7 @@ app.get('/v1/solver-network/simulation/:intentId', (req: Request, res: Response)
       accountInfo: pending.accountInfo,
       executionMode: pending.accountInfo?.mode || 'DIRECT',
     },
-  });
+  }));
 });
 
 // POST /v1/solver-network/execute/:intentId — user confirms, execute real settlement
