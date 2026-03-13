@@ -1039,7 +1039,8 @@ app.post('/v1/solver-network/trigger', async (req: Request, res: Response) => {
 
     res.json({ success: true, data: sanitizeBigInt(result) });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message });
+    console.error('[trigger] ❌ Unhandled error:', err);
+    res.status(500).json({ success: false, error: err.message, detail: err.stack?.split('\n')[1]?.trim() });
   }
 });
 

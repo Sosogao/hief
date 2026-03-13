@@ -51,6 +51,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+// Make BigInt JSON-serializable globally — converts to decimal string
+// Must be set before any JSON.stringify call in this process
+BigInt.prototype.toJSON = function () { return this.toString(); };
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const ethers_1 = require("ethers");
@@ -823,6 +826,22 @@ async function pollAndAuction() {
 const app = (0, express_1.default)();
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
+// BigInt-safe JSON serializer — replaces bigint values with their decimal string representation
+app.set('json replacer', (_key, value) => typeof value === 'bigint' ? value.toString() : value);
+/** Recursively convert BigInt values to strings for JSON-safe serialization */
+function sanitizeBigInt(obj) {
+    if (typeof obj === 'bigint')
+        return obj.toString();
+    if (obj === null || typeof obj !== 'object')
+        return obj;
+    if (Array.isArray(obj))
+        return obj.map(sanitizeBigInt);
+    const result = {};
+    for (const key of Object.keys(obj)) {
+        result[key] = sanitizeBigInt(obj[key]);
+    }
+    return result;
+}
 app.get('/health', (_req, res) => {
     res.json({
         status: 'ok',
@@ -871,7 +890,7 @@ app.post('/v1/solver-network/quote', async (req, res) => {
     const quotePromises = SOLVER_PERSONAS.map(solver => generateQuote(solver, mockIntent, inputAmountUSD, outputToken));
     const quotes = await Promise.all(quotePromises);
     const validQuotes = quotes.filter(q => q.status === 'QUOTED').sort((a, b) => b.netOutUSD - a.netOutUSD);
-    res.json({
+    res.json(sanitizeBigInt({
         success: true,
         data: {
             inputToken,
@@ -884,7 +903,7 @@ app.post('/v1/solver-network/quote', async (req, res) => {
                 ? ((validQuotes[0].netOutUSD - validQuotes[validQuotes.length - 1].netOutUSD) / validQuotes[validQuotes.length - 1].netOutUSD * 100).toFixed(2) + '%'
                 : '0%',
         },
-    });
+    }));
 });
 // POST /v1/solver-network/trigger — manually trigger auction for a specific intent
 app.post('/v1/solver-network/trigger', async (req, res) => {
@@ -924,10 +943,11 @@ app.post('/v1/solver-network/trigger', async (req, res) => {
         auctionHistory.unshift(result);
         if (auctionHistory.length > 50)
             auctionHistory.pop();
-        res.json({ success: true, data: result });
+        res.json({ success: true, data: sanitizeBigInt(result) });
     }
     catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+        console.error('[trigger] ❌ Unhandled error:', err);
+        res.status(500).json({ success: false, error: err.message, detail: err.stack?.split('\n')[1]?.trim() });
     }
 });
 // GET /v1/solver-network/simulation/:intentId — get pending simulation result
@@ -938,7 +958,7 @@ app.get('/v1/solver-network/simulation/:intentId', (req, res) => {
         res.status(404).json({ success: false, error: 'No pending simulation for this intent' });
         return;
     }
-    res.json({
+    res.json(sanitizeBigInt({
         success: true,
         data: {
             intentId,
@@ -947,7 +967,7 @@ app.get('/v1/solver-network/simulation/:intentId', (req, res) => {
             accountInfo: pending.accountInfo,
             executionMode: pending.accountInfo?.mode || 'DIRECT',
         },
-    });
+    }));
 });
 // POST /v1/solver-network/execute/:intentId — user confirms, execute real settlement
 // Works for both DIRECT mode (broadcasts immediately) and MULTISIG mode (marks as PENDING_SIGNATURES)

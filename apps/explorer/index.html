@@ -863,7 +863,10 @@ async function confirmChatIntent() {
                   setTimeout(loadStats, 1000);
                 } else {
                   var errMsg = solverJson.error || (solverRes.status === 503 ? 'Solver service still starting. Please try again in ~10s.' : 'Auction failed');
-                  appendChatMessage('system', '⚠️ Solver auction error: ' + errMsg);
+                  var detail = solverJson.detail || solverJson.stack || '';
+                  var fullMsg = errMsg + (detail ? ' | Detail: ' + detail : '') + ' [HTTP ' + solverRes.status + ']';
+                  appendChatMessage('system', '⚠️ Solver auction error: ' + fullMsg);
+                  console.error('Solver auction failed:', solverJson);
                 }
               } catch(e) {
                 if (e.name === 'AbortError') {

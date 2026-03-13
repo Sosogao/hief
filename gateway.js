@@ -96,7 +96,7 @@ const SERVICES = [
       PORT: '3008',
       BUS_URL: 'http://localhost:3001',
       TENDERLY_RPC_URL: 'https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d',
-      SETTLEMENT_CHAIN_ID: '1',
+      SETTLEMENT_CHAIN_ID: '99917',
     },
     pathPrefixes: ['/v1/solver-network'],
     healthPath: '/health'
@@ -135,10 +135,8 @@ async function buildService(svc) {
   const serverJs = path.join(distDir, 'server.js');
   
   if (svc.cmd !== 'node') return true; // tsx/ts-node don't need build
-  if (fs.existsSync(serverJs)) {
-    console.log(`[gateway] ${svc.name}: dist already exists, skipping build`);
-    return true;
-  }
+  // Always rebuild — dist may be stale if source changed since last deploy
+  console.log(`[gateway] ${svc.name}: building from source...`);
   
   console.log(`[gateway] Building ${svc.name}...`);
   return new Promise((resolve) => {
