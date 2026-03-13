@@ -416,10 +416,6 @@ async function simulateSettlement(
   const inUSD  = parseFloat(amountInHuman)  * getTokenPrice(inputSymbol);
 
   // Use Tenderly fork just for gas estimation
-  const simTo   = skillQ ? skillQ.contractTo : (swapQ ? swapQ.swapTo   : WETH_ADDRESS);
-  const simData = skillQ ? skillQ.calldata   : (swapQ ? swapQ.swapData : '0xd0e30db0'); // WETH.deposit()
-  const simValueBig = skillQ ? skillQ.value : (swapQ ? swapQ.swapValue : ethers.parseEther('0.001'));
-  const simValue = '0x' + simValueBig.toString(16);
   const simFrom = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY).address;
 
   let gasUsed = 250_000;
@@ -427,21 +423,52 @@ async function simulateSettlement(
   let simSuccess = true;
 
   try {
-    const simPayload = {
-      jsonrpc: '2.0', method: 'tenderly_simulateTransaction',
-      params: [{ from: simFrom, to: simTo, data: simData, value: simValue, gas: '0x7A120' }, 'latest'],
-      id: 1,
-    };
-    const simRes  = await fetch(TENDERLY_RPC_URL, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(simPayload), signal: AbortSignal.timeout(8000),
-    });
-    const simJson = await simRes.json() as any;
-    if (!simJson.error) {
-      const result = simJson.result || {};
-      gasUsed = parseInt(result.gasUsed || '0x3D090', 16);
-      simulatedBlock = parseInt(result.blockNumber || '0x0', 16);
-      simSuccess = result.status === true;
+    if (skillQ?.needsApproval) {
+      // ── Aave ERC-20 deposit: approve + supply must be simulated as a bundle ──
+      // tenderly_simulateBundle executes txs in sequence on the same forked state
+      const approveIface = new ethers.Interface(['function approve(address spender, uint256 amount) returns (bool)']);
+      const approveData  = approveIface.encodeFunctionData('approve', [skillQ.approveTarget, skillQ.amountIn]);
+      const bundlePayload = {
+        jsonrpc: '2.0', method: 'tenderly_simulateBundle',
+        params: [[
+          { from: simFrom, to: skillQ.tokenIn,    data: approveData,    value: '0x0', gas: '0x15F90' },
+          { from: simFrom, to: skillQ.contractTo, data: skillQ.calldata, value: '0x0', gas: '0x5B8D8' },
+        ], 'latest'],
+        id: 1,
+      };
+      const bundleRes  = await fetch(TENDERLY_RPC_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bundlePayload), signal: AbortSignal.timeout(8000),
+      });
+      const bundleJson = await bundleRes.json() as any;
+      if (!bundleJson.error && Array.isArray(bundleJson.result)) {
+        const results = bundleJson.result as any[];
+        gasUsed = results.reduce((sum: number, r: any) => sum + parseInt(r.gasUsed || '0', 16), 0) || 250_000;
+        simulatedBlock = parseInt(results[results.length - 1]?.blockNumber || '0x0', 16);
+        simSuccess = results.every((r: any) => r.status === true);
+      }
+    } else {
+      // ── Single-tx simulation (swap or ETH deposit) ──────────────────────────
+      const simTo       = skillQ ? skillQ.contractTo : (swapQ ? swapQ.swapTo   : WETH_ADDRESS);
+      const simData     = skillQ ? skillQ.calldata   : (swapQ ? swapQ.swapData : '0xd0e30db0');
+      const simValueBig = skillQ ? skillQ.value      : (swapQ ? swapQ.swapValue : ethers.parseEther('0.001'));
+      const simValue    = '0x' + simValueBig.toString(16);
+      const simPayload  = {
+        jsonrpc: '2.0', method: 'tenderly_simulateTransaction',
+        params: [{ from: simFrom, to: simTo, data: simData, value: simValue, gas: '0x7A120' }, 'latest'],
+        id: 1,
+      };
+      const simRes  = await fetch(TENDERLY_RPC_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(simPayload), signal: AbortSignal.timeout(8000),
+      });
+      const simJson = await simRes.json() as any;
+      if (!simJson.error) {
+        const result = simJson.result || {};
+        gasUsed = parseInt(result.gasUsed || '0x3D090', 16);
+        simulatedBlock = parseInt(result.blockNumber || '0x0', 16);
+        simSuccess = result.status === true;
+      }
     }
   } catch { /* ignore sim errors — still return DEX quote amounts */ }
 
