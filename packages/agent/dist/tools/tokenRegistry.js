@@ -123,8 +123,8 @@ const MAINNET_TOKENS = [
     },
 ];
 exports.MAINNET_TOKENS = MAINNET_TOKENS;
-// ─── Tenderly Virtual Testnet / Base Sepolia fork (chainId: 99917) ─────────────
-// Token addresses mirror Base Sepolia (same contract addresses as Base mainnet for standard tokens)
+// ─── Tenderly Virtual Testnet — Ethereum Mainnet Fork (chainId: 99917) ──────────
+// This fork mirrors Ethereum mainnet state, so all mainnet contract addresses apply.
 const TENDERLY_TOKENS = [
     {
         symbol: 'ETH',
@@ -137,7 +137,7 @@ const TENDERLY_TOKENS = [
     {
         symbol: 'WETH',
         name: 'Wrapped Ether',
-        address: '0x4200000000000000000000000000000000000006',
+        address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', // Ethereum mainnet WETH
         decimals: 18,
         chainId: 99917,
         aliases: ['weth', 'wrapped eth', 'wrapped ether'],
@@ -145,8 +145,7 @@ const TENDERLY_TOKENS = [
     {
         symbol: 'USDC',
         name: 'USD Coin',
-        // Base Sepolia USDC address
-        address: '0x036CbD53842c5426634e7929541eC2318f3dCF7e',
+        address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // Ethereum mainnet USDC
         decimals: 6,
         chainId: 99917,
         aliases: ['usdc', 'usd coin', '美元稳定币', 'u', 'usdc.e'],
@@ -154,7 +153,7 @@ const TENDERLY_TOKENS = [
     {
         symbol: 'USDT',
         name: 'Tether USD',
-        address: '0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2',
+        address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', // Ethereum mainnet USDT
         decimals: 6,
         chainId: 99917,
         aliases: ['usdt', 'tether', '泰达币', '泰达'],
@@ -162,10 +161,18 @@ const TENDERLY_TOKENS = [
     {
         symbol: 'DAI',
         name: 'Dai Stablecoin',
-        address: '0x50c5725949A6F0c72E6C4a641F24049A917DB0Cb',
+        address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', // Ethereum mainnet DAI
         decimals: 18,
         chainId: 99917,
         aliases: ['dai', 'dai stablecoin'],
+    },
+    {
+        symbol: 'WBTC',
+        name: 'Wrapped Bitcoin',
+        address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', // Ethereum mainnet WBTC
+        decimals: 8,
+        chainId: 99917,
+        aliases: ['wbtc', 'wrapped btc', 'btc', '比特币'],
     },
 ];
 const ALL_TOKENS = [...BASE_TOKENS, ...MAINNET_TOKENS, ...TENDERLY_TOKENS];
@@ -216,7 +223,7 @@ function getChainName(chainId) {
         8453: 'Base',
         84532: 'Base Sepolia',
         31337: 'Localhost',
-        99917: 'Tenderly Virtual Testnet (Base Sepolia fork)',
+        99917: 'Tenderly Mainnet Fork',
     };
     return names[chainId] ?? `Chain ${chainId}`;
 }

@@ -1530,7 +1530,16 @@ async function loadConfig() {
     var json = await res.json();
     if (json.success) {
       _currentForkUrl = json.data.tenderlyRpcUrl;
-      _currentChainId = json.data.settlementChainId;
+      var serverChainId = json.data.settlementChainId;
+      // Auto-sync: if server has wrong chainId, correct it silently
+      if (serverChainId !== CHAIN_ID) {
+        fetch(SOLVER_API+'/v1/solver-network/config', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ settlementChainId: CHAIN_ID })
+        }).catch(function(){});
+        serverChainId = CHAIN_ID;
+      }
+      _currentChainId = serverChainId;
       document.getElementById('headerChainId').textContent = _currentChainId;
       document.getElementById('statChainId').textContent = _currentChainId;
       // Store autofund capability

@@ -232,7 +232,7 @@ class ReputationAwareConversationEngine {
         const outputSymbol = uiHints.outputTokenSymbol ?? intent.outputs[0]?.token.slice(0, 8);
         const inputAmountHuman = uiHints.inputAmountHuman ?? intent.input.amount;
         const chain = (0, tokenRegistry_1.getChainName)(chainId);
-        const slippage = (intent.constraints.slippageBps / 100).toFixed(2);
+        const slippage = ((intent.constraints.slippageBps ?? 50) / 100).toFixed(2);
         // Build reputation-aware system prompt
         const repSuffix = ctx ? this.repAdapter.buildSystemPromptSuffix(ctx) : '';
         const systemPrompt = systemPrompt_1.CONFIRMATION_SYSTEM_PROMPT + repSuffix;

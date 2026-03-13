@@ -2,7 +2,7 @@ import express from 'express';
 import { ConversationEngine } from './conversation/conversationEngine';
 import { IntentParser } from './parser/intentParser';
 
-const app = express();
+const app: ReturnType<typeof express> = express();
 const PORT = process.env.PORT || 3004;
 
 app.use(express.json({ limit: '1mb' }));
