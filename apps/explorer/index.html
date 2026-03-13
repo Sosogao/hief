@@ -190,13 +190,13 @@
         </div>
         <p class="text-xs text-slate-400 mb-4">Connect MetaMask and deploy a new Safe contract on the current Tenderly fork. The AI key will co-own the wallet and pay gas.</p>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div class="wallet-card wallet-card-multisig p-4 rounded-xl cursor-pointer hover:opacity-90" onclick="createSmartWallet('multisig')">
+          <div class="wallet-card wallet-card-multisig p-4 rounded-xl cursor-pointer hover:opacity-90" onclick="confirmCreateWallet('multisig')">
             <div class="text-lg mb-1">🔐</div>
             <div class="text-sm font-bold text-slate-100 mb-1">Safe Multisig</div>
             <div class="text-xs text-slate-400">2-of-2 Safe. Owners: you + AI key. Threshold: 2. Both must co-sign transactions.</div>
             <div class="text-xs text-purple-400 mt-2 font-medium">→ MULTISIG mode</div>
           </div>
-          <div class="wallet-card wallet-card-safe4337 p-4 rounded-xl cursor-pointer hover:opacity-90" onclick="createSmartWallet('safe4337')">
+          <div class="wallet-card wallet-card-safe4337 p-4 rounded-xl cursor-pointer hover:opacity-90" onclick="confirmCreateWallet('safe4337')">
             <div class="text-lg mb-1">🛡</div>
             <div class="text-sm font-bold text-slate-100 mb-1">Safe + ERC-4337</div>
             <div class="text-xs text-slate-400">Safe with Safe4337Module enabled. Owner: you only. Signs UserOps via MetaMask.</div>
@@ -204,6 +204,24 @@
           </div>
         </div>
         <div id="createWalletStatus" class="text-xs mt-3 text-slate-400 hidden"></div>
+      </div>
+    </div>
+
+    <!-- Create Wallet Confirmation Modal -->
+    <div id="createWalletModal" class="hidden fixed inset-0 z-50 flex items-center justify-center" style="background:rgba(0,0,0,0.7);" onclick="if(event.target===this)hideCreateWalletModal();">
+      <div class="glass rounded-2xl p-6 w-full max-w-md mx-4 border border-slate-600">
+        <div class="flex items-center gap-2 mb-4">
+          <span id="createWalletModalIcon" class="text-2xl"></span>
+          <h3 id="createWalletModalTitle" class="text-base font-bold text-slate-100"></h3>
+        </div>
+        <div id="createWalletModalBody" class="text-xs text-slate-300 space-y-2 mb-5"></div>
+        <div class="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-xs text-yellow-300 mb-5">
+          ⚠️ This deploys a new contract on the Tenderly fork using the AI key as gas payer. This action cannot be undone. Make sure your MetaMask is connected to the correct fork (chainId 99917).
+        </div>
+        <div class="flex gap-3">
+          <button onclick="hideCreateWalletModal()" class="flex-1 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 text-sm font-medium transition-colors">Cancel</button>
+          <button id="createWalletModalConfirmBtn" class="flex-1 py-2 rounded-lg text-sm font-medium transition-colors" onclick="doCreateWallet()">Deploy</button>
+        </div>
       </div>
     </div>
     <div id="results" class="hidden">
@@ -1579,6 +1597,54 @@ function showCreateWalletPanel() {
 function hideCreateWalletPanel() {
   document.getElementById('createWalletPanel').classList.add('hidden');
   document.getElementById('createWalletStatus').classList.add('hidden');
+}
+
+var _pendingCreateWalletType = null;
+
+function confirmCreateWallet(walletType) {
+  _pendingCreateWalletType = walletType;
+  var modal = document.getElementById('createWalletModal');
+  var icon = document.getElementById('createWalletModalIcon');
+  var title = document.getElementById('createWalletModalTitle');
+  var body = document.getElementById('createWalletModalBody');
+  var btn = document.getElementById('createWalletModalConfirmBtn');
+  if (walletType === 'multisig') {
+    icon.textContent = '🔐';
+    title.textContent = 'Deploy Safe Multisig';
+    body.innerHTML = '<p>A new <strong>2-of-2 Gnosis Safe</strong> will be deployed on the current Tenderly fork:</p>'
+      + '<ul style="list-style:disc;padding-left:16px;margin-top:8px;space-y:4px;">'
+      + '<li>Owners: <strong>your MetaMask address</strong> + AI key</li>'
+      + '<li>Threshold: <strong>2</strong> — both must co-sign every transaction</li>'
+      + '<li>Safe4337Module: <strong>NOT enabled</strong> → detected as MULTISIG mode</li>'
+      + '<li>Auto-funded with <strong>1 ETH</strong> via tenderly_setBalance</li>'
+      + '</ul>';
+    btn.className = 'flex-1 py-2 rounded-lg text-sm font-medium transition-colors bg-purple-600 hover:bg-purple-500 text-white';
+    btn.textContent = 'Deploy Safe Multisig';
+  } else {
+    icon.textContent = '🛡';
+    title.textContent = 'Deploy Safe + ERC-4337';
+    body.innerHTML = '<p>A new <strong>Safe with Safe4337Module</strong> will be deployed on the current Tenderly fork:</p>'
+      + '<ul style="list-style:disc;padding-left:16px;margin-top:8px;">'
+      + '<li>Owner: <strong>your MetaMask address</strong> only</li>'
+      + '<li>Threshold: <strong>1</strong></li>'
+      + '<li>Safe4337Module v0.3.0: <strong>enabled</strong> as module + fallback handler</li>'
+      + '<li>EntryPoint: <strong>v0.7</strong> (0x000000...da032)</li>'
+      + '<li>Auto-funded with <strong>1 ETH</strong> via tenderly_setBalance</li>'
+      + '</ul>';
+    btn.className = 'flex-1 py-2 rounded-lg text-sm font-medium transition-colors bg-orange-600 hover:bg-orange-500 text-white';
+    btn.textContent = 'Deploy Safe+ERC-4337';
+  }
+  modal.classList.remove('hidden');
+}
+
+function hideCreateWalletModal() {
+  document.getElementById('createWalletModal').classList.add('hidden');
+  _pendingCreateWalletType = null;
+}
+
+async function doCreateWallet() {
+  hideCreateWalletModal();
+  if (_pendingCreateWalletType) await createSmartWallet(_pendingCreateWalletType);
 }
 
 async function createSmartWallet(walletType) {
