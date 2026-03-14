@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Simulation error propagation (2026-03-14)
+
+`simulateSettlement` now captures and surfaces simulation errors in the returned `SimulationResult.error` field.
+
+**Changes (`packages/solver-network/src/server.ts`):**
+- Bundle path (MULTISIG/ERC4337): distinguish top-level RPC error from per-tx revert; extract `failed?.error?.message || failed?.revert_reason` on revert
+- Single-tx path: same pattern — set `simSuccess=false` and populate `simError` on RPC error or `status !== true`
+- Return: `...(simError && { error: simError })` appended to `SimulationResult`
+
+Previously the `error?: string` field on `SimulationResult` was never populated — callers could not distinguish a reverted simulation from a successful one without re-checking `success: false`.
+
+---
+
 ### Fixed — Aave WITHDRAW "invalid address" crash (2026-03-14)
 
 **Bug:** `withdraw 50 USDC from Aave` via Safe Multisig threw during solver auction:

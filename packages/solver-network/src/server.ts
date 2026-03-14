@@ -493,6 +493,7 @@ async function simulateSettlement(
   let gasUsed = 250_000;
   let simulatedBlock = 0;
   let simSuccess = true;
+  let simError: string | undefined;
 
   try {
     if (skillQ?.needsApproval) {
@@ -513,11 +514,20 @@ async function simulateSettlement(
         body: JSON.stringify(bundlePayload), signal: AbortSignal.timeout(8000),
       });
       const bundleJson = await bundleRes.json() as any;
-      if (!bundleJson.error && Array.isArray(bundleJson.result)) {
+      if (bundleJson.error) {
+        simSuccess = false;
+        simError = bundleJson.error?.message || String(bundleJson.error);
+      } else if (Array.isArray(bundleJson.result)) {
         const results = bundleJson.result as any[];
         gasUsed = results.reduce((sum: number, r: any) => sum + parseInt(r.gasUsed || '0', 16), 0) || 250_000;
         simulatedBlock = parseInt(results[results.length - 1]?.blockNumber || '0x0', 16);
         simSuccess = results.every((r: any) => r.status === true);
+        if (!simSuccess) {
+          const failed = results.find((r: any) => r.status !== true);
+          simError = failed?.error?.message
+            || failed?.revert_reason
+            || 'Transaction reverted — Safe may lack token balance or approval';
+        }
       }
     } else {
       // ── Single-tx simulation (swap or ETH deposit) ──────────────────────────
@@ -535,11 +545,17 @@ async function simulateSettlement(
         body: JSON.stringify(simPayload), signal: AbortSignal.timeout(8000),
       });
       const simJson = await simRes.json() as any;
-      if (!simJson.error) {
+      if (simJson.error) {
+        simSuccess = false;
+        simError = simJson.error?.message || String(simJson.error);
+      } else {
         const result = simJson.result || {};
         gasUsed = parseInt(result.gasUsed || '0x3D090', 16);
         simulatedBlock = parseInt(result.blockNumber || '0x0', 16);
         simSuccess = result.status === true;
+        if (!simSuccess) {
+          simError = result.error?.message || result.revert_reason || 'Transaction reverted';
+        }
       }
     }
   } catch { /* ignore sim errors — still return DEX quote amounts */ }
@@ -565,6 +581,7 @@ async function simulateSettlement(
     priceImpactBps: winner?.priceImpactBps ?? 0,
     balanceChanges,
     simulatedBlock,
+    ...(simError && { error: simError }),
   };
 }
 
