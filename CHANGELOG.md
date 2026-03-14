@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — solver-network DeFi skill unit tests (2026-03-14)
+
+New test file: `packages/solver-network/src/__tests__/defiSkills.test.ts` (30 tests)
+
+| Suite | Coverage |
+|---|---|
+| `DefiSkillRegistry` | register/unregister, getById, getForSkill, getForToken, buildCalls dispatch, generic fallback |
+| `AaveV3Adapter.supportsToken` | ETH alias, USDC, WETH, aToken, unknown token, case-insensitive, wrong skill |
+| `AaveV3Adapter.buildCalls` | DEPOSIT ERC-20 (approve+supply), DEPOSIT ETH (no approve, value), WITHDRAW ERC-20 (no approve), WITHDRAW ETH (approve aWETH + withdrawETH) |
+| `AaveV3Adapter.quote` (APY mocked) | DEPOSIT USDC/ETH, WITHDRAW USDC/aUSDC/WETH, unsupported token, STAKE, calldata ABI decode verification |
+| Global `defiRegistry` | AaveV3Adapter pre-registered, skills, chains |
+
+No live RPC calls — `_fetchApy` is spied on and returns a fixed 4.5%.
+
+---
+
 ### Fixed — Policy engine false positives for DeFi intents (2026-03-14)
 
 **R9 (ETH drain) — false positive on ETH DEPOSIT:**
