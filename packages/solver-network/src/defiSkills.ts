@@ -71,6 +71,8 @@ export interface DefiProtocolAdapter {
   readonly supportedChains: number[];
   /** Skill types this adapter supports */
   readonly supportedSkills: DefiSkillType[];
+  /** Optional: upstream skill source URL (e.g. GitHub SKILL.md repository) */
+  readonly skillSource?: string;
 
   /** Returns true if this adapter can handle (token, skill) */
   supportsToken(token: string, skill: DefiSkillType): boolean;
@@ -467,6 +469,28 @@ export class LidoAdapter implements DefiProtocolAdapter {
 
 defiRegistry.register(new AaveV3Adapter());
 defiRegistry.register(new LidoAdapter());
+
+// ─── Skill Market registrations ───────────────────────────────────────────────
+// Skills loaded from upstream SKILL.md manifests via SkillMarket.
+
+import { skillMarket } from './skillMarket';
+import { FxProtocolAdapter } from './adapters/fxProtocol';
+
+skillMarket.register(
+  {
+    id: 'fx-protocol',
+    name: 'f(x) Protocol',
+    version: '1.0.0',
+    description: 'fxSAVE yield vault — deposit USDC/fxUSD to earn leveraged stable yield',
+    skillSourceUrl: 'https://github.com/AladdinDAO/fx-sdk-skill',
+    supportedSkills: ['DEPOSIT', 'WITHDRAW'],
+    supportedTokens: ['0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'],
+    chainIds: [1],
+    sdk: '@aladdindao/fx-sdk',
+    author: 'AladdinDAO',
+  },
+  new FxProtocolAdapter(),
+);
 
 // ─── Legacy exports (backward compatibility) ──────────────────────────────────
 

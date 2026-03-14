@@ -50,7 +50,10 @@ Always respond with this exact JSON structure:
 3. If the output token is missing for a SWAP, add "outputToken" to missingFields.
 3a. For DEPOSIT: outputToken is the receipt token (e.g. "aUSDC" for Aave), set protocol="aave". outputToken may be null — the solver will resolve the aToken address.
 3b. For WITHDRAW: inputToken is the underlying asset to withdraw (e.g. "USDC"), outputToken is the same token (user gets their asset back). Set protocol="aave" by default.
-3c. For DEPOSIT/WITHDRAW, set protocol to the mentioned protocol ("aave", "compound", etc.) or "aave" by default.
+3c. For DEPOSIT/WITHDRAW, set protocol to the mentioned protocol ("aave", "compound", "fx", "fxsave", etc.) or "aave" by default.
+    Supported protocols: Aave v3 (DEPOSIT/WITHDRAW USDC/ETH/WBTC/DAI/USDT), f(x) Protocol fxSAVE (DEPOSIT/WITHDRAW USDC).
+    For f(x) / fxSAVE: set protocol="fx". outputToken for DEPOSIT = "fxSAVE". outputToken for WITHDRAW = "USDC".
+    Recognize: "fx protocol", "fxSAVE", "f(x)", "AladdinDAO fx", "deposit USDC to fxSAVE", "withdraw from fxSAVE".
 3d. For STAKE/UNSTAKE: outputToken is the staking receipt (e.g. "stETH" for Lido ETH stake). Set protocol="lido" for ETH staking. outputToken may be null — the solver resolves the receipt token address.
 4. Set clarificationNeeded=true if ANY required field is missing.
 5. The clarificationQuestion should be in the SAME LANGUAGE as the user's message.

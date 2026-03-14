@@ -26,6 +26,7 @@ import * as path from 'path';
 import { detectAccountMode, proposeSafeMultisig, executeWithSignatures, buildSafeTxTypedData, type AccountInfo, type ExecutionMode, type SafeTxData, type SafeProposalResult } from './safeMultisig';
 import { quoteOdos, quoteUniswapV3, encodeMultiSend, encodeApprove, buildSwapCalls, type DexQuote } from './dexQuoters';
 import { defiRegistry, type DefiSkillQuote, type DefiSkillType } from './defiSkills';
+import { skillMarket } from './skillMarket';
 import { executeERC4337, getOrCreateSimpleAccount, ENTRY_POINT_V06, type ERC4337ExecutionResult } from './erc4337';
 import {
   buildSafe4337UserOperation, computeUserOpHash, buildUserOpTypedData,
@@ -1746,6 +1747,29 @@ app.post('/v1/solver-network/faucet', async (req: Request, res: Response) => {
 
   console.log(`[Faucet] Funded ${address.slice(0, 10)}... | assets: ${JSON.stringify(funded)}`);
   res.json({ success: true, data: { address, funded, errors, network: 'Tenderly fork (test only)' } });
+});
+
+// ─── Skill Market API ────────────────────────────────────────────────────────
+
+// GET /v1/solver-network/skills — list all registered DeFi skills
+app.get('/v1/solver-network/skills', (_req: Request, res: Response) => {
+  const skills = skillMarket.list().map(m => ({
+    ...m,
+    adapter: defiRegistry.getById(m.id)
+      ? { id: m.id, supportedSkills: m.supportedSkills }
+      : null,
+  }));
+  res.json({ success: true, data: skills });
+});
+
+// GET /v1/solver-network/skills/:id — get single skill detail
+app.get('/v1/solver-network/skills/:id', (req: Request, res: Response) => {
+  const manifest = skillMarket.get(req.params.id);
+  if (!manifest) {
+    res.status(404).json({ success: false, error: 'Skill not found' });
+    return;
+  }
+  res.json({ success: true, data: manifest });
 });
 
 // ─── Config API ──────────────────────────────────────────────────────────────────────────────────────
