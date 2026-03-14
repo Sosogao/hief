@@ -226,6 +226,41 @@ function getTokenDecimals(tokenAddr: string): number {
   return 18;  // ETH, WETH, DAI, etc.
 }
 
+/**
+ * Build the Safe/UserOp calldata for a winning quote.
+ * Returns the (to, value, data, operation) tuple ready to feed into
+ * proposeSafeMultisig / buildSafe4337UserOperation.
+ * Centralised here so auction + execute endpoints share the same logic.
+ */
+function buildWinnerTxParams(winner: SolverQuote, intent: any): { to: string; value: bigint; data: string; operation: 0 | 1 } {
+  const skillQ = winner.defiSkillQuote;
+  const swapQ  = skillQ ? undefined : getExecQuote(winner);
+
+  if (skillQ) {
+    const calls = buildAaveDepositCalls(skillQ);
+    if (calls.length > 1) {
+      const ms = encodeMultiSend(calls);
+      return { to: ms.to, value: ms.value, data: ms.data, operation: ms.operation };
+    }
+    return { to: calls[0].to, value: calls[0].value, data: calls[0].data, operation: 0 };
+  }
+
+  if (swapQ) {
+    if (swapQ.needsApproval) {
+      const ms = encodeMultiSend([
+        { to: intent.input?.token || '', value: 0n, data: encodeApprove(swapQ.approveTarget, BigInt(intent.input?.amount || '0')) },
+        { to: swapQ.swapTo, value: swapQ.swapValue, data: swapQ.swapData },
+      ]);
+      return { to: ms.to, value: ms.value, data: ms.data, operation: ms.operation };
+    }
+    return { to: swapQ.swapTo, value: swapQ.swapValue, data: swapQ.swapData, operation: 0 };
+  }
+
+  // Fallback: WETH wrap proof-of-execution
+  const wethIface = new ethers.Interface(['function deposit() payable']);
+  return { to: WETH_ADDRESS, value: ethers.parseEther('0.001'), data: wethIface.encodeFunctionData('deposit', []), operation: 0 };
+}
+
 async function generateQuote(
   solver: SolverPersona,
   intent: any,
@@ -805,35 +840,8 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
             let multisigProposal: (SafeProposalResult & { threshold: number }) | undefined;
             try {
               // Build calldata: DeFi skill (Aave) or swap (UniV3)
-              const skillQMs = winner.defiSkillQuote as DefiSkillQuote | undefined;
-              const swapQ = skillQMs ? undefined : getExecQuote(winner);
-              let msTo: string, msValue: string, msData: string, msOp: 0 | 1;
-              if (skillQMs) {
-                // DeFi skill: approve + supply via MultiSend if needed
-                const calls = buildAaveDepositCalls(skillQMs);
-                if (calls.length > 1) {
-                  const multiSend = encodeMultiSend(calls);
-                  msTo = multiSend.to; msValue = '0'; msData = multiSend.data; msOp = multiSend.operation;
-                } else {
-                  msTo = calls[0].to; msValue = calls[0].value.toString(); msData = calls[0].data; msOp = 0;
-                }
-              } else if (swapQ) {
-                if (swapQ.needsApproval) {
-                  // MultiSend: approve + swap (DELEGATECALL to MultiSendCallOnly)
-                  const multiSend = encodeMultiSend([
-                    { to: intent.input.token, value: 0n, data: encodeApprove(swapQ.approveTarget, BigInt(intent.input?.amount || '0')) },
-                    { to: swapQ.swapTo, value: swapQ.swapValue, data: swapQ.swapData },
-                  ]);
-                  msTo = multiSend.to; msValue = '0'; msData = multiSend.data; msOp = multiSend.operation;
-                } else {
-                  msTo = swapQ.swapTo; msValue = swapQ.swapValue.toString(); msData = swapQ.swapData; msOp = 0;
-                }
-              } else {
-                // Fallback: WETH deposit proof-of-execution
-                const wethInterface = new ethers.Interface(['function deposit() payable']);
-                msTo = WETH_ADDRESS; msValue = ethers.parseEther('0.001').toString();
-                msData = wethInterface.encodeFunctionData('deposit', []); msOp = 0;
-              }
+              const { to: msTo, value: msValueBig, data: msData, operation: msOp } = buildWinnerTxParams(winner, intent);
+              const msValue = msValueBig.toString();
               const proposal = await proposeSafeMultisig({
                 safeAddress: smartAccount,
                 chainId: SETTLEMENT_CHAIN_ID,
@@ -888,33 +896,7 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
                 }
               }
 
-              // Build calldata: DeFi skill (Aave) or swap (UniV3)
-              const skillQ4337 = winner.defiSkillQuote as DefiSkillQuote | undefined;
-              const swapQ4337 = skillQ4337 ? undefined : getExecQuote(winner);
-              let uoTo: string, uoValue: bigint, uoData: string, uoOp: 0 | 1;
-              if (skillQ4337) {
-                const calls = buildAaveDepositCalls(skillQ4337);
-                if (calls.length > 1) {
-                  const ms = encodeMultiSend(calls);
-                  uoTo = ms.to; uoValue = ms.value; uoData = ms.data; uoOp = ms.operation;
-                } else {
-                  uoTo = calls[0].to; uoValue = calls[0].value; uoData = calls[0].data; uoOp = 0;
-                }
-              } else if (swapQ4337) {
-                if (swapQ4337.needsApproval) {
-                  const multiSend4337 = encodeMultiSend([
-                    { to: intent.input.token, value: 0n, data: encodeApprove(swapQ4337.approveTarget, BigInt(intent.input?.amount || '0')) },
-                    { to: swapQ4337.swapTo, value: swapQ4337.swapValue, data: swapQ4337.swapData },
-                  ]);
-                  uoTo = multiSend4337.to; uoValue = multiSend4337.value; uoData = multiSend4337.data; uoOp = multiSend4337.operation;
-                } else {
-                  uoTo = swapQ4337.swapTo; uoValue = swapQ4337.swapValue; uoData = swapQ4337.swapData; uoOp = 0;
-                }
-              } else {
-                const wethInterface = new ethers.Interface(['function deposit() payable']);
-                uoTo = WETH_ADDRESS; uoValue = ethers.parseEther('0.001');
-                uoData = wethInterface.encodeFunctionData('deposit', []); uoOp = 0;
-              }
+              const { to: uoTo, value: uoValue, data: uoData, operation: uoOp } = buildWinnerTxParams(winner, intent);
               const userOp = await buildSafe4337UserOperation({
                 safeAddress: accountInfo.address,
                 to: uoTo, value: uoValue, data: uoData, operation: uoOp,
@@ -1273,15 +1255,14 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
       let typedData = pending.safe4337TypedData;
 
       if (!userOp || !userOpHash || !typedData) {
-        // Build fresh UserOp if not cached
-        const wethInterface = new ethers.Interface(['function deposit() payable']);
-        const depositData = wethInterface.encodeFunctionData('deposit', []);
+        // Build fresh UserOp using the winner's actual calldata
+        const { to: uoTo, value: uoValue, data: uoData, operation: uoOp } = buildWinnerTxParams(winner, intent);
         userOp = await buildSafe4337UserOperation({
           safeAddress: accountInfo!.address,
-          to: WETH_ADDRESS,
-          value: ethers.parseEther('0.001'),
-          data: depositData,
-          operation: 0,
+          to: uoTo,
+          value: uoValue,
+          data: uoData,
+          operation: uoOp,
           rpcUrl: TENDERLY_RPC_URL,
         });
         userOpHash = await computeUserOpHash(userOp, TENDERLY_RPC_URL);
@@ -1395,11 +1376,8 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
     // ─── MULTISIG MODE: Propose Safe TX, wait for co-signatures ──────────────────────────────
     try {
       console.log(`[SafeMultisig] User confirmed multisig proposal for ${intentId.slice(0, 16)}... Proposing Safe TX...`);
-      const wethInterface = new ethers.Interface(['function deposit() payable']);
-      const depositData = wethInterface.encodeFunctionData('deposit', []);
-      const txTo = WETH_ADDRESS;
-      const txValue = ethers.parseEther('0.001').toString();
-      const txData = depositData;
+      const { to: txTo, value: txValueBig, data: txData, operation: txOp } = buildWinnerTxParams(winner, intent);
+      const txValue = txValueBig.toString();
       const proposal = await proposeSafeMultisig({
         safeAddress: accountInfo.address,
         chainId: SETTLEMENT_CHAIN_ID,
@@ -1408,6 +1386,7 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
         to: txTo,
         value: txValue,
         data: txData,
+        operation: txOp,
         intentId,
       });
       const multisigProposal = { ...proposal, threshold: accountInfo.threshold };
@@ -1417,7 +1396,7 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
         to: txTo,
         value: txValue,
         data: txData,
-        operation: 0,
+        operation: txOp,
         safeTxGas: '0',
         baseGas: '0',
         gasPrice: '0',
