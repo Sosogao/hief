@@ -340,11 +340,31 @@ export class ConversationEngine {
     slippage: string,
     chain: string
   ): string {
-    const uiHints = (intent.meta?.uiHints ?? {}) as Record<string, string>;
-    const protocol = uiHints.protocol ?? 'auto';
-    const isFxSave  = protocol === 'fx' || outputSymbol === 'fxSAVE';
-    const isDeposit = !isFxSave && (protocol === 'aave' || outputSymbol.startsWith('a'));
+    const uiHints = (intent.meta?.uiHints ?? {}) as Record<string, unknown>;
+    const protocol = (uiHints.protocol as string) ?? 'auto';
+    const leverageTag = (intent.meta?.tags?.[0] as string) || '';
+    const isLeverage = protocol === 'fx' && (
+      leverageTag === 'LEVERAGE_LONG' ||
+      leverageTag === 'LEVERAGE_SHORT' ||
+      leverageTag === 'LEVERAGE_CLOSE'
+    );
+    const leverageMult = uiHints.leverage ? `${uiHints.leverage}x ` : '';
+    const leverageMarket = (uiHints.market as string) ?? '';
+    const isFxSave  = !isLeverage && (protocol === 'fx' || outputSymbol === 'fxSAVE');
+    const isDeposit = !isFxSave && !isLeverage && (protocol === 'aave' || outputSymbol.startsWith('a'));
     const isLido    = protocol === 'lido' || outputSymbol === 'stETH';
+
+    if (isLeverage) {
+      const action = leverageTag === 'LEVERAGE_LONG' ? 'Long' : leverageTag === 'LEVERAGE_SHORT' ? 'Short' : 'Close';
+      return `📋 **Transaction Summary**
+
+⚡ ${leverageMult}${action} **${inputAmountHuman} ${inputSymbol}** (f(x) Protocol)
+🌐 Network: ${chain}
+🔄 Route: FxRoute (fork-compatible, on-chain only)
+🏦 Protocol: f(x) Protocol — ${leverageMarket} market leveraged position
+
+Reply **yes** to confirm or **no** to cancel.`;
+    }
 
     if (isFxSave) {
       const action = outputSymbol === 'USDC' ? 'Withdraw' : 'Deposit';
@@ -391,13 +411,32 @@ Reply **yes** to confirm or **no** to cancel.`;
   }
 
   private buildExecutionMessage(intent: HIEFIntent, chainId: number): string {
-    const uiHints2 = (intent.meta?.uiHints ?? {}) as Record<string, string>;
-    const inputSymbol = uiHints2.inputTokenSymbol ?? 'tokens';
-    const outputSymbol = uiHints2.outputTokenSymbol ?? 'tokens';
-    const inputAmountHuman = uiHints2.inputAmountHuman ?? intent.input.amount;
-    const protocol = uiHints2.protocol ?? 'auto';
-    const isFxSave2  = protocol === 'fx' || outputSymbol === 'fxSAVE';
-    const isDeposit = !isFxSave2 && (protocol === 'aave' || outputSymbol.startsWith('a'));
+    const uiHints2 = (intent.meta?.uiHints ?? {}) as Record<string, unknown>;
+    const inputSymbol = (uiHints2.inputTokenSymbol as string) ?? 'tokens';
+    const outputSymbol = (uiHints2.outputTokenSymbol as string) ?? 'tokens';
+    const inputAmountHuman = (uiHints2.inputAmountHuman as string) ?? intent.input.amount;
+    const protocol = (uiHints2.protocol as string) ?? 'auto';
+    const leverageTag2 = (intent.meta?.tags?.[0] as string) || '';
+    const isLeverage2 = protocol === 'fx' && (
+      leverageTag2 === 'LEVERAGE_LONG' ||
+      leverageTag2 === 'LEVERAGE_SHORT' ||
+      leverageTag2 === 'LEVERAGE_CLOSE'
+    );
+    const leverageMult2 = uiHints2.leverage ? `${uiHints2.leverage}x ` : '';
+    const isFxSave2  = !isLeverage2 && (protocol === 'fx' || outputSymbol === 'fxSAVE');
+    const isDeposit = !isFxSave2 && !isLeverage2 && (protocol === 'aave' || outputSymbol.startsWith('a'));
+
+    if (isLeverage2) {
+      const action2 = leverageTag2 === 'LEVERAGE_LONG' ? 'Long' : leverageTag2 === 'LEVERAGE_SHORT' ? 'Short' : 'Close';
+      return `✅ **Intent confirmed!**
+
+Your leverage intent has been submitted:
+- **Intent ID**: \`${intent.intentId.slice(0, 16)}...\`
+- **Action**: ${leverageMult2}${action2} ${inputAmountHuman} ${inputSymbol} (f(x) Protocol)
+- **Status**: Building position via FxRoute...
+
+You'll receive a transaction to sign shortly.`;
+    }
 
     if (isFxSave2) {
       const action = outputSymbol === 'USDC' ? 'Withdraw' : 'Deposit';

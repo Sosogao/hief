@@ -195,7 +195,7 @@ function getIntentSkillType(intent: any): DefiSkillType | null {
   const type = intent.meta?.intentType
     || intent.intentType
     || (intent.meta?.tags?.[0] as string | undefined);
-  const DEFI_SKILLS: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE', 'PROVIDE_LIQUIDITY'];
+  const DEFI_SKILLS: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE', 'PROVIDE_LIQUIDITY', 'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE'];
   return DEFI_SKILLS.includes(type) ? (type as DefiSkillType) : null;
 }
 
@@ -302,7 +302,18 @@ async function generateQuote(
         swapQuote: undefined, defiSkillQuote: undefined,
       };
     }
-    const skill = await adapter.quote({ skill: skillType, tokenIn, amountIn, recipient, rpcUrl: TENDERLY_RPC_URL });
+    // Detect fork mode: non-mainnet chainId means we're on a Tenderly fork
+    const routingMode: 'MAINNET' | 'FORK' = SETTLEMENT_CHAIN_ID !== 1 ? 'FORK' : 'MAINNET';
+    const uiHints = (intent.meta?.uiHints ?? {}) as Record<string, unknown>;
+    const skill = await adapter.quote({
+      skill: skillType,
+      tokenIn, amountIn, recipient,
+      rpcUrl: TENDERLY_RPC_URL,
+      routingMode,
+      leverageMultiplier: typeof uiHints.leverage === 'number' ? uiHints.leverage : undefined,
+      positionId: typeof uiHints.positionId === 'number' ? uiHints.positionId : 0,
+      market: typeof uiHints.market === 'string' ? uiHints.market : undefined,
+    });
     if (!skill) {
       return {
         solverId: solver.id, solverName: solver.name, protocol: adapter.name,

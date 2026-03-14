@@ -17,6 +17,9 @@ Extract DeFi intent parameters from user messages. You MUST return valid JSON on
 - REMOVE_LIQUIDITY: Remove liquidity from a pool
 - STAKE: Stake tokens in a protocol (e.g., "stake 0.5 ETH on Lido", "质押 1 ETH 到 Lido")
 - UNSTAKE: Unstake/withdraw staked tokens (e.g., "unstake 0.5 stETH from Lido")
+- LEVERAGE_LONG: Open/increase a leveraged long position (e.g., "2x long wstETH with 0.5 wstETH on f(x)", "open 3x long WBTC")
+- LEVERAGE_SHORT: Open/increase a leveraged short position (e.g., "2x short wstETH with 0.5 wstETH on f(x)")
+- LEVERAGE_CLOSE: Close or reduce a leveraged position (e.g., "close my wstETH long position on f(x)")
 - UNKNOWN: Cannot determine intent type
 
 ## Output Format
@@ -55,6 +58,7 @@ Always respond with this exact JSON structure:
     For f(x) / fxSAVE: set protocol="fx". outputToken for DEPOSIT = "fxSAVE". outputToken for WITHDRAW = "USDC".
     Recognize: "fx protocol", "fxSAVE", "f(x)", "AladdinDAO fx", "deposit USDC to fxSAVE", "withdraw from fxSAVE".
 3d. For STAKE/UNSTAKE: outputToken is the staking receipt (e.g. "stETH" for Lido ETH stake). Set protocol="lido" for ETH staking. outputToken may be null — the solver resolves the receipt token address.
+3e. For LEVERAGE_LONG/SHORT/CLOSE: set protocol="fx" (f(x) Protocol). inputToken is the collateral (wstETH for ETH market, WBTC for BTC market). Store leverage in extraParams.leverage (number). Infer market from token: wstETH/ETH/stETH → market="ETH", WBTC/BTC → market="BTC". Store in extraParams.market. positionId defaults to 0 (new position). outputToken = inputToken (collateral).
 4. Set clarificationNeeded=true if ANY required field is missing.
 5. The clarificationQuestion should be in the SAME LANGUAGE as the user's message.
 6. For Chinese input, respond with Chinese clarification questions.
@@ -195,6 +199,50 @@ Response:
   "clarificationNeeded": false,
   "clarificationQuestion": null,
   "rawIntent": "withdraw 50 USDC from fxSAVE"
+}
+
+User: "open 2x long wstETH with 0.5 wstETH on f(x)"
+Response:
+{
+  "intentType": "LEVERAGE_LONG",
+  "confidence": 0.95,
+  "params": {
+    "inputToken": "wstETH",
+    "inputAmount": "0.5",
+    "outputToken": "wstETH",
+    "minOutputAmount": null,
+    "slippageBps": 100,
+    "deadline": null,
+    "targetChain": null,
+    "protocol": "fx",
+    "extraParams": { "leverage": 2, "market": "ETH", "positionId": 0 }
+  },
+  "missingFields": [],
+  "clarificationNeeded": false,
+  "clarificationQuestion": null,
+  "rawIntent": "open 2x long wstETH with 0.5 wstETH on f(x)"
+}
+
+User: "2x short WBTC with 0.01 WBTC on f(x)"
+Response:
+{
+  "intentType": "LEVERAGE_SHORT",
+  "confidence": 0.95,
+  "params": {
+    "inputToken": "WBTC",
+    "inputAmount": "0.01",
+    "outputToken": "WBTC",
+    "minOutputAmount": null,
+    "slippageBps": 100,
+    "deadline": null,
+    "targetChain": null,
+    "protocol": "fx",
+    "extraParams": { "leverage": 2, "market": "BTC", "positionId": 0 }
+  },
+  "missingFields": [],
+  "clarificationNeeded": false,
+  "clarificationQuestion": null,
+  "rawIntent": "2x short WBTC with 0.01 WBTC on f(x)"
 }
 
 User: "帮我把以太换成USDC"

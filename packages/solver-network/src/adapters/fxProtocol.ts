@@ -1,21 +1,28 @@
 /**
- * f(x) Protocol fxSAVE Adapter
+ * f(x) Protocol fxSAVE + Leverage Adapter
  *
- * Integrates f(x) Protocol's fxSAVE vault into HIEF via the @aladdindao/fx-sdk.
+ * Integrates f(x) Protocol into HIEF via the @aladdindao/fx-sdk.
  * Upstream skill reference: https://github.com/AladdinDAO/fx-sdk-skill
  *
  * Supported skills:
- *   DEPOSIT  — deposit USDC into fxSAVE → receive fxSAVE shares
- *   WITHDRAW — instant redeem fxSAVE shares → USDC (fee applies)
+ *   DEPOSIT        — deposit USDC into fxSAVE → receive fxSAVE shares
+ *   WITHDRAW       — instant redeem fxSAVE shares → USDC (fee applies)
+ *   LEVERAGE_LONG  — open/increase leveraged long position (wstETH/WBTC collateral)
+ *   LEVERAGE_SHORT — open/increase leveraged short position (wstETH/WBTC collateral)
+ *   LEVERAGE_CLOSE — close/reduce a leveraged position
  *
- * Contract addresses (Ethereum mainnet):
- *   USDC:   0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
- *   fxUSD:  0x085780639CC2cACd35E474e71f4d000e2405d8f6
- *   fxSAVE: discovered dynamically from SDK txs (txs[last].to)
+ * Adaptive routing:
+ *   routingMode === 'FORK'    → targets = [FX_ROUTE, FX_ROUTE_V3] (no external aggregator APIs)
+ *   routingMode === 'MAINNET' → targets = undefined (SDK picks best: Velora/Odos/FxRoute)
  */
 
 import { ethers } from 'ethers';
 import { FxSdk } from '@aladdindao/fx-sdk';
+
+// ROUTE_TYPES is declared but not exported by @aladdindao/fx-sdk.
+// Use string literal values directly (matching the enum at runtime).
+const FX_ROUTE   = 'FxRoute'   as const;
+const FX_ROUTE_V3 = 'FxRoute 2' as const;
 import {
   type DefiProtocolAdapter,
   type DefiSkillType,
@@ -26,10 +33,14 @@ import {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const USDC_ADDRESS = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
+const USDC_ADDRESS       = '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48';
 const USDC_ADDRESS_LOWER = USDC_ADDRESS.toLowerCase();
-const FXUSD_ADDRESS = '0x085780639CC2cACd35E474e71f4d000e2405d8f6';
-const USDC_DECIMALS = 6;
+const FXUSD_ADDRESS      = '0x085780639CC2cACd35E474e71f4d000e2405d8f6';
+const WSTETH_ADDRESS     = '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0';
+const WBTC_ADDRESS       = '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599';
+
+const WSTETH_LOWER = WSTETH_ADDRESS.toLowerCase();
+const WBTC_LOWER   = WBTC_ADDRESS.toLowerCase();
 
 /**
  * Live mainnet RPC for FxSdk quote calls.
@@ -42,41 +53,67 @@ const USDC_DECIMALS = 6;
 const MAINNET_RPC_URL =
   process.env.MAINNET_RPC_URL ?? 'https://ethereum-rpc.publicnode.com';
 
+/** Token address → f(x) market type */
+const TOKEN_TO_MARKET: Record<string, 'ETH' | 'BTC'> = {
+  [WSTETH_LOWER]: 'ETH',
+  [WBTC_LOWER]:   'BTC',
+};
+
+/**
+ * Returns fork-safe route targets.
+ * On Tenderly fork, Odos/Velora API calls fail (mainnet quotes don't work on fork state).
+ * FxRoute is purely on-chain — works on any fork based on mainnet state.
+ */
+function forkSafeTargets(routingMode?: string): string[] | undefined {
+  if (routingMode === 'FORK') {
+    return [FX_ROUTE, FX_ROUTE_V3];
+  }
+  return undefined; // MAINNET: let SDK pick best route (Velora/Odos/FxRoute)
+}
+
 // ─── FxProtocolAdapter ────────────────────────────────────────────────────────
 
 export class FxProtocolAdapter implements DefiProtocolAdapter {
   readonly id = 'fx-protocol';
   readonly name = 'f(x) Protocol';
   readonly description =
-    'f(x) Protocol fxSAVE — earn yield on USDC via the f(x) leveraged stablecoin protocol';
+    'f(x) Protocol — fxSAVE yield vault + leveraged long/short positions on wstETH and WBTC';
   readonly supportedChains = [1];
-  readonly supportedSkills: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW'];
+  readonly supportedSkills: DefiSkillType[] = [
+    'DEPOSIT', 'WITHDRAW',
+    'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE',
+  ];
   readonly skillSource = 'https://github.com/AladdinDAO/fx-sdk-skill';
 
-  /**
-   * Lazily discovered fxSAVE contract address.
-   * Populated on the first successful deposit or withdraw SDK call.
-   */
+  /** Lazily discovered fxSAVE contract address (from first successful SDK call) */
   private fxSaveAddress: string | null = null;
 
   supportsToken(token: string, skill: DefiSkillType): boolean {
     const key = token.toLowerCase();
     if (skill === 'DEPOSIT') {
-      // Accept USDC as deposit token
       return key === USDC_ADDRESS_LOWER;
     }
     if (skill === 'WITHDRAW') {
-      // Accept USDC (user states amount in USDC) or fxSAVE shares token
       if (key === USDC_ADDRESS_LOWER) return true;
       if (this.fxSaveAddress && key === this.fxSaveAddress.toLowerCase()) return true;
       return false;
+    }
+    if (skill === 'LEVERAGE_LONG' || skill === 'LEVERAGE_SHORT') {
+      // Accept wstETH (ETH market) or WBTC (BTC market)
+      return key in TOKEN_TO_MARKET;
+    }
+    if (skill === 'LEVERAGE_CLOSE') {
+      return key in TOKEN_TO_MARKET;
     }
     return false;
   }
 
   async quote(params: QuoteParams): Promise<DefiSkillQuote | null> {
-    if (params.skill === 'DEPOSIT') return this._quoteDeposit(params);
-    if (params.skill === 'WITHDRAW') return this._quoteWithdraw(params);
+    if (params.skill === 'DEPOSIT')        return this._quoteDeposit(params);
+    if (params.skill === 'WITHDRAW')       return this._quoteWithdraw(params);
+    if (params.skill === 'LEVERAGE_LONG')  return this._quoteLeverageLong(params);
+    if (params.skill === 'LEVERAGE_SHORT') return this._quoteLeverageShort(params);
+    if (params.skill === 'LEVERAGE_CLOSE') return this._quoteLeverageClose(params);
     return null;
   }
 
@@ -128,7 +165,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         tokenOut: fxSaveAddr,
         tokenOutSymbol: 'fxSAVE',
         amountIn,
-        amountOut: amountIn, // shares ≈ USDC amount (1:1 approximation; actual ratio via config)
+        amountOut: amountIn,
         apy,
         contractTo: mainTx.to,
         calldata: mainTx.data as string,
@@ -147,7 +184,6 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
   private async _quoteWithdraw(params: QuoteParams): Promise<DefiSkillQuote | null> {
     const { tokenIn, amountIn, recipient } = params;
     try {
-      // tokenIn is the underlying USDC amount the user wants back
       if (tokenIn.toLowerCase() !== USDC_ADDRESS_LOWER) return null;
 
       // Always use live mainnet RPC for quote building — fork state can be stale.
@@ -178,16 +214,12 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const txs = result.txs;
       if (!txs || txs.length === 0) return null;
 
-      // Last tx is the main withdraw tx
       const mainTx = txs[txs.length - 1];
 
-      // Discover fxSAVE address from the approve tx (spender approved = fxSAVE vault or router)
-      // For WITHDRAW: the approve tx approves spending of fxSAVE shares
       const approveTx = txs.find(
         t => typeof t.data === 'string' && t.data.startsWith('0x095ea7b3'),
       );
 
-      // The approve tx's .to is the fxSAVE shares token (what gets burned)
       const fxSaveAddr: string = approveTx
         ? approveTx.to
         : (this.fxSaveAddress ?? mainTx.to);
@@ -199,7 +231,6 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
 
       if (approveTx) {
         needsApproval = true;
-        // Extract spender from approve calldata
         approveTarget = '0x' + approveTx.data.slice(34, 74);
       }
 
@@ -211,14 +242,13 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         tokenOut: USDC_ADDRESS,
         tokenOutSymbol: 'USDC',
         amountIn,
-        amountOut: amountIn, // approximate; actual output may differ by fee
+        amountOut: amountIn,
         apy: 0,
         contractTo: mainTx.to,
         calldata: mainTx.data as string,
         value: mainTx.value ?? 0n,
         needsApproval,
         approveTarget,
-        // receiptTokenIn = fxSAVE shares (the token burned during withdraw; needed for sim funding)
         receiptTokenIn: fxSaveAddr,
         route: 'f(x) Protocol fxSAVE Instant Withdraw → USDC',
         priceImpactBps: 0,
@@ -229,12 +259,210 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
     }
   }
 
+  private async _quoteLeverageLong(params: QuoteParams): Promise<DefiSkillQuote | null> {
+    const { tokenIn, amountIn, recipient, routingMode, leverageMultiplier = 2, positionId = 0 } = params;
+    try {
+      const key = tokenIn.toLowerCase();
+      const market = TOKEN_TO_MARKET[key];
+      if (!market) return null;
+
+      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      const targets = forkSafeTargets(routingMode);
+
+      const result = await sdk.increasePosition({
+        market,
+        type: 'long',
+        positionId,
+        leverage: leverageMultiplier,
+        inputTokenAddress: tokenIn,
+        amount: amountIn,
+        slippage: 1,
+        userAddress: recipient,
+        ...(targets ? { targets: targets as any } : {}),
+      });
+
+      // Pick first available route (SDK sorted by best price)
+      const route = result.routes[0];
+      if (!route || route.txs.length === 0) return null;
+
+      const allCalls: CallData[] = route.txs.map(tx => ({
+        to: tx.to,
+        value: tx.value ?? 0n,
+        data: tx.data as string,
+      }));
+
+      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
+
+      return {
+        protocol: this.name,
+        adapterId: this.id,
+        skill: 'LEVERAGE_LONG',
+        tokenIn,
+        tokenOut: tokenIn, // collateral stays in position
+        tokenOutSymbol: tokenSymbol,
+        amountIn,
+        amountOut: amountIn,
+        apy: 0,
+        contractTo: allCalls[allCalls.length - 1].to,
+        calldata: allCalls[allCalls.length - 1].data,
+        value: allCalls[allCalls.length - 1].value,
+        needsApproval: false, // handled in allCalls
+        approveTarget: '',
+        allCalls,
+        leverageInfo: {
+          market,
+          positionType: 'long',
+          leverage: leverageMultiplier,
+          executionPrice: route.executionPrice,
+          routeType: route.routeType,
+        },
+        route: `f(x) ${leverageMultiplier}x Long ${tokenSymbol} (${market} market, ${route.routeType})`,
+        priceImpactBps: 0,
+      };
+    } catch (e) {
+      console.warn('[FxProtocol] leverage long quote error:', (e as Error).message?.slice(0, 120));
+      return null;
+    }
+  }
+
+  private async _quoteLeverageShort(params: QuoteParams): Promise<DefiSkillQuote | null> {
+    const { tokenIn, amountIn, recipient, routingMode, leverageMultiplier = 2, positionId = 0 } = params;
+    try {
+      const key = tokenIn.toLowerCase();
+      const market = TOKEN_TO_MARKET[key];
+      if (!market) return null;
+
+      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      const targets = forkSafeTargets(routingMode);
+
+      const result = await sdk.increasePosition({
+        market,
+        type: 'short',
+        positionId,
+        leverage: leverageMultiplier,
+        inputTokenAddress: tokenIn,
+        amount: amountIn,
+        slippage: 1,
+        userAddress: recipient,
+        ...(targets ? { targets: targets as any } : {}),
+      });
+
+      const route = result.routes[0];
+      if (!route || route.txs.length === 0) return null;
+
+      const allCalls: CallData[] = route.txs.map(tx => ({
+        to: tx.to,
+        value: tx.value ?? 0n,
+        data: tx.data as string,
+      }));
+
+      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
+
+      return {
+        protocol: this.name,
+        adapterId: this.id,
+        skill: 'LEVERAGE_SHORT',
+        tokenIn,
+        tokenOut: tokenIn,
+        tokenOutSymbol: tokenSymbol,
+        amountIn,
+        amountOut: amountIn,
+        apy: 0,
+        contractTo: allCalls[allCalls.length - 1].to,
+        calldata: allCalls[allCalls.length - 1].data,
+        value: allCalls[allCalls.length - 1].value,
+        needsApproval: false,
+        approveTarget: '',
+        allCalls,
+        leverageInfo: {
+          market,
+          positionType: 'short',
+          leverage: leverageMultiplier,
+          executionPrice: route.executionPrice,
+          routeType: route.routeType,
+        },
+        route: `f(x) ${leverageMultiplier}x Short ${tokenSymbol} (${market} market, ${route.routeType})`,
+        priceImpactBps: 0,
+      };
+    } catch (e) {
+      console.warn('[FxProtocol] leverage short quote error:', (e as Error).message?.slice(0, 120));
+      return null;
+    }
+  }
+
+  private async _quoteLeverageClose(params: QuoteParams): Promise<DefiSkillQuote | null> {
+    const { tokenIn, amountIn, recipient, routingMode, positionId = 0 } = params;
+    try {
+      const key = tokenIn.toLowerCase();
+      const market = TOKEN_TO_MARKET[key];
+      if (!market) return null;
+
+      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      const targets = forkSafeTargets(routingMode);
+
+      const result = await sdk.reducePosition({
+        market,
+        type: 'long', // reducePosition works for both long and short
+        positionId,
+        amount: amountIn,
+        outputTokenAddress: tokenIn,
+        slippage: 1,
+        userAddress: recipient,
+        isClosePosition: true,
+        ...(targets ? { targets: targets as any } : {}),
+      });
+
+      const route = result.routes[0];
+      if (!route || route.txs.length === 0) return null;
+
+      const allCalls: CallData[] = route.txs.map(tx => ({
+        to: tx.to,
+        value: tx.value ?? 0n,
+        data: tx.data as string,
+      }));
+
+      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
+
+      return {
+        protocol: this.name,
+        adapterId: this.id,
+        skill: 'LEVERAGE_CLOSE',
+        tokenIn,
+        tokenOut: tokenIn,
+        tokenOutSymbol: tokenSymbol,
+        amountIn,
+        amountOut: amountIn,
+        apy: 0,
+        contractTo: allCalls[allCalls.length - 1].to,
+        calldata: allCalls[allCalls.length - 1].data,
+        value: allCalls[allCalls.length - 1].value,
+        needsApproval: false,
+        approveTarget: '',
+        allCalls,
+        leverageInfo: {
+          market,
+          positionType: 'close',
+          leverage: 0,
+          executionPrice: route.executionPrice,
+          routeType: route.routeType,
+        },
+        route: `f(x) Close Position ${tokenSymbol} (${market} market, ${route.routeType})`,
+        priceImpactBps: 0,
+      };
+    } catch (e) {
+      console.warn('[FxProtocol] leverage close quote error:', (e as Error).message?.slice(0, 120));
+      return null;
+    }
+  }
+
   buildCalls(quote: DefiSkillQuote): CallData[] {
+    // Leverage quotes pre-pack all calls (approve + position tx)
+    if (quote.allCalls && quote.allCalls.length > 0) return quote.allCalls;
+
+    // fxSAVE deposit/withdraw
     const calls: CallData[] = [];
     if (quote.needsApproval) {
       const iface = new ethers.Interface(['function approve(address,uint256) returns (bool)']);
-      // For DEPOSIT: approve USDC spending
-      // For WITHDRAW: approve fxSAVE shares spending (receiptTokenIn)
       const approveToken =
         quote.skill === 'WITHDRAW' && quote.receiptTokenIn
           ? quote.receiptTokenIn
@@ -254,12 +482,8 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
   private async _fetchApy(sdk: FxSdk): Promise<number> {
     try {
       const config = await sdk.getFxSaveConfig();
-      // APY is not directly available; return 0 as conservative estimate
-      // In production, you'd track totalAssets growth over time
       if (config.totalAssetsWei > 0n && config.totalSupplyWei > 0n) {
-        // expenseRatio is in 1e18 scale; approximate net APY from protocol fee
-        const expenseRatioPct = Number(config.expenseRatio) / 1e16; // pct
-        // Return a conservative placeholder — real APY requires historical data
+        const expenseRatioPct = Number(config.expenseRatio) / 1e16;
         return Math.max(0, expenseRatioPct);
       }
       return 0;

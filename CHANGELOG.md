@@ -7,6 +7,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — f(x) Protocol leveraged positions + adaptive routing (2026-03-15)
+
+**New skill types**: `LEVERAGE_LONG`, `LEVERAGE_SHORT`, `LEVERAGE_CLOSE` — open/increase/close leveraged positions on wstETH (ETH market) and WBTC (BTC market) via f(x) Protocol.
+
+**Adaptive routing design** (generalizable to any future adapter):
+- `QuoteParams` gets `routingMode: 'MAINNET' | 'FORK'`; server sets it from `SETTLEMENT_CHAIN_ID !== 1`
+- Each adapter self-selects routes based on `routingMode` — no per-protocol routing logic in server
+- FX Protocol: `FORK` → `['FxRoute', 'FxRoute 2']` (pure on-chain, no Odos/Velora API); `MAINNET` → SDK picks best
+
+**Changes in `packages/solver-network/src/defiSkills.ts`:**
+- `DefiSkillType`: + `LEVERAGE_LONG | LEVERAGE_SHORT | LEVERAGE_CLOSE`
+- `QuoteParams`: + `routingMode?`, `leverageMultiplier?`, `positionId?`, `market?`
+- `DefiSkillQuote`: + `allCalls?: CallData[]` (pre-packed multi-tx) + `leverageInfo?`
+- Registry `buildCalls()`: short-circuits to `allCalls` if pre-packed
+- FX `skillMarket.register`: updated skills + wstETH + WBTC in `supportedTokens`
+
+**Changes in `packages/solver-network/src/adapters/fxProtocol.ts`:**
+- Added `_quoteLeverageLong`, `_quoteLeverageShort`, `_quoteLeverageClose`
+- Uses `sdk.increasePosition()` / `sdk.reducePosition()` from `@aladdindao/fx-sdk`
+- `forkSafeTargets(routingMode)`: FORK → `['FxRoute', 'FxRoute 2']`, MAINNET → undefined (SDK chooses)
+- `ROUTE_TYPES` not exported by SDK → string literals used (match SDK internal values)
+
+**Changes in `packages/solver-network/src/server.ts`:**
+- `getIntentSkillType`: + LEVERAGE_LONG/SHORT/CLOSE in DEFI_SKILLS
+- Passes `routingMode`, `leverageMultiplier`, `positionId`, `market` to adapter
+
+**Changes in `packages/agent/src/parser/intentParser.ts`:**
+- `IntentType`, Zod schema, `SUPPORTED_TYPES`: + three leverage types
+- `isLeverage` flag; uiHints propagates `leverage`, `market`, `positionId` from LLM `extraParams`
+
+**Changes in `packages/agent/src/prompts/systemPrompt.ts`:**
+- Rule 3e: leverage parsing (protocol="fx", market inference, extraParams format)
+- Two new few-shot examples: wstETH 2x long, WBTC 2x short
+
+**Changes in `packages/agent/src/conversation/conversationEngine.ts`:**
+- Leverage confirmation template (detects from `tags[0]`, shows leverage multiplier + market)
+
+**Changes in `apps/explorer/index.html`:**
+- "2x long wstETH (f(x))" and "2x short WBTC (f(x))" quick suggestion buttons
+
+---
+
 ### Changed — Default Tenderly fork to HIEFMainnetFork2 + localStorage persistence (2026-03-15)
 
 **New fork**: `HIEFMainnetFork2` — `https://virtual.mainnet.eu.rpc.tenderly.co/4a595ca5-c96a-4ad8-aeb6-b789648f9880` (chainId 99917). Previous fork had expired fxSAVE pool epoch.

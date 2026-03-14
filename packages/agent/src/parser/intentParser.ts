@@ -16,6 +16,9 @@ export type IntentType =
   | 'REMOVE_LIQUIDITY'
   | 'STAKE'
   | 'UNSTAKE'
+  | 'LEVERAGE_LONG'
+  | 'LEVERAGE_SHORT'
+  | 'LEVERAGE_CLOSE'
   | 'UNKNOWN';
 
 export interface ParsedIntentParams {
@@ -52,7 +55,9 @@ const ParseResultSchema = z.object({
   intentType: z.enum([
     'SWAP', 'DEPOSIT', 'WITHDRAW',
     'BRIDGE', 'PROVIDE_LIQUIDITY', 'REMOVE_LIQUIDITY',
-    'STAKE', 'UNSTAKE', 'UNKNOWN',
+    'STAKE', 'UNSTAKE',
+    'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE',
+    'UNKNOWN',
   ]),
   confidence: z.number().min(0).max(1),
   params: z.object({
@@ -145,7 +150,7 @@ export class IntentParser {
     }
 
     // Supported intent types
-    const SUPPORTED_TYPES = new Set(['SWAP', 'DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE']);
+    const SUPPORTED_TYPES = new Set(['SWAP', 'DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE', 'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE']);
     if (!SUPPORTED_TYPES.has(parseResult.intentType)) {
       resolveErrors.push(`Intent type "${parseResult.intentType}" is not yet supported. Supported: SWAP, DEPOSIT, WITHDRAW (Aave), STAKE, UNSTAKE (Lido).`);
       return { parseResult, resolveErrors };
@@ -174,7 +179,10 @@ export class IntentParser {
     const isWithdraw = parseResult.intentType === 'WITHDRAW';
     const isStake    = parseResult.intentType === 'STAKE';
     const isUnstake  = parseResult.intentType === 'UNSTAKE';
-    const isSkill    = isDeposit || isWithdraw || isStake || isUnstake;
+    const isLeverage = parseResult.intentType === 'LEVERAGE_LONG'
+                    || parseResult.intentType === 'LEVERAGE_SHORT'
+                    || parseResult.intentType === 'LEVERAGE_CLOSE';
+    const isSkill    = isDeposit || isWithdraw || isStake || isUnstake || isLeverage;
 
     let outputTokenAddress = '0x0000000000000000000000000000000000000000'; // filled by solver
     const protocolHint = params.protocol?.toLowerCase();
@@ -183,10 +191,11 @@ export class IntentParser {
                                `a${inputTokenInfo.symbol}`
                              )
                            : isStake   ? `st${inputTokenInfo.symbol}`
+                           : isLeverage ? inputTokenInfo.symbol  // collateral stays in position
                            : '';
 
-    if (isWithdraw || isUnstake) {
-      // For WITHDRAW/UNSTAKE the user receives the underlying asset back
+    if (isWithdraw || isUnstake || isLeverage) {
+      // For WITHDRAW/UNSTAKE/LEVERAGE the user receives the underlying asset back (or collateral stays)
       outputTokenAddress = inputTokenInfo.address;
       outputTokenSymbol  = inputTokenInfo.symbol;
     } else if (!isSkill) {
@@ -284,8 +293,11 @@ export class IntentParser {
           inputTokenSymbol: inputTokenInfo.symbol,
           outputTokenSymbol,
           inputAmountHuman: params.inputAmount,
-          protocol: params.protocol ?? (isStake || isUnstake ? 'lido' : isDeposit || isWithdraw ? 'aave' : 'auto'),
+          protocol: params.protocol ?? (isStake || isUnstake ? 'lido' : isDeposit || isWithdraw ? 'aave' : isLeverage ? 'fx' : 'auto'),
           // Note: 'aave' is the default protocol for DEPOSIT/WITHDRAW when none specified
+          ...(isLeverage && params.extraParams?.leverage ? { leverage: params.extraParams.leverage } : {}),
+          ...(isLeverage && params.extraParams?.market ? { market: params.extraParams.market } : {}),
+          ...(params.extraParams?.positionId !== undefined ? { positionId: params.extraParams.positionId } : {}),
         },
       },
     };

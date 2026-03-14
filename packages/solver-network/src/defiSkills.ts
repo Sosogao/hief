@@ -14,7 +14,7 @@ import { ethers } from 'ethers';
 
 // ─── Common Types ─────────────────────────────────────────────────────────────
 
-export type DefiSkillType = 'DEPOSIT' | 'WITHDRAW' | 'STAKE' | 'UNSTAKE' | 'PROVIDE_LIQUIDITY';
+export type DefiSkillType = 'DEPOSIT' | 'WITHDRAW' | 'STAKE' | 'UNSTAKE' | 'PROVIDE_LIQUIDITY' | 'LEVERAGE_LONG' | 'LEVERAGE_SHORT' | 'LEVERAGE_CLOSE';
 
 /** The output of adapter.quote() — protocol-agnostic execution spec */
 export interface DefiSkillQuote {
@@ -40,6 +40,19 @@ export interface DefiSkillQuote {
   receiptTokenIn?: string;
   route: string;              // human-readable description
   priceImpactBps: number;     // always 0 for lending protocol interactions
+  /**
+   * For multi-tx skills (leverage positions): pre-packed call list.
+   * If set, buildCalls() returns this directly instead of building from contractTo/calldata.
+   */
+  allCalls?: CallData[];
+  /** Leverage position metadata (set for LEVERAGE_LONG/SHORT/CLOSE) */
+  leverageInfo?: {
+    market: string;           // 'ETH' | 'BTC'
+    positionType: string;     // 'long' | 'short'
+    leverage: number;
+    executionPrice: string;
+    routeType: string;        // e.g. 'FxRoute', 'FxRoute 2'
+  };
 }
 
 /** Parameters passed to DefiProtocolAdapter.quote() */
@@ -50,6 +63,14 @@ export interface QuoteParams {
   recipient: string;
   rpcUrl: string;
   chainId?: number;
+  /** 'FORK' = prefer protocol-native routes (no external aggregator APIs); 'MAINNET' = use best route */
+  routingMode?: 'MAINNET' | 'FORK';
+  /** Leverage multiplier, e.g. 2 for 2x (used by LEVERAGE_LONG/SHORT) */
+  leverageMultiplier?: number;
+  /** Position ID: 0 = new position, >0 = existing (used by LEVERAGE_*) */
+  positionId?: number;
+  /** Market: 'ETH' or 'BTC' (used by LEVERAGE_*) */
+  market?: string;
 }
 
 export type CallData = { to: string; value: bigint; data: string };
@@ -126,6 +147,8 @@ export class DefiSkillRegistry {
    * Falls back to generic approve + call if adapter is not found.
    */
   buildCalls(quote: DefiSkillQuote): CallData[] {
+    // If adapter pre-packed all calls (multi-tx skills like leverage), return them directly
+    if (quote.allCalls && quote.allCalls.length > 0) return quote.allCalls;
     const adapter = this.adapters.get(quote.adapterId);
     if (adapter) return adapter.buildCalls(quote);
     // Generic fallback
@@ -481,10 +504,14 @@ skillMarket.register(
     id: 'fx-protocol',
     name: 'f(x) Protocol',
     version: '1.0.0',
-    description: 'fxSAVE yield vault — deposit USDC/fxUSD to earn leveraged stable yield',
+    description: 'fxSAVE yield vault + leveraged long/short positions on wstETH and WBTC',
     skillSourceUrl: 'https://github.com/AladdinDAO/fx-sdk-skill',
-    supportedSkills: ['DEPOSIT', 'WITHDRAW'],
-    supportedTokens: ['0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'],
+    supportedSkills: ['DEPOSIT', 'WITHDRAW', 'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE'],
+    supportedTokens: [
+      '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC
+      '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0', // wstETH
+      '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', // WBTC
+    ],
     chainIds: [1],
     sdk: '@aladdindao/fx-sdk',
     author: 'AladdinDAO',
