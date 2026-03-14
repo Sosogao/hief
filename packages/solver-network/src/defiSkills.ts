@@ -283,7 +283,7 @@ export class AaveV3Adapter implements DefiProtocolAdapter {
         tokenOutSymbol: isEth ? 'ETH' : underlyingSymbol,
         amountIn, amountOut: amountIn, apy: 0,
         contractTo, calldata, value,
-        needsApproval: !isEth,   // withdrawETH requires gateway approval; Pool.withdraw does not
+        needsApproval: isEth,    // withdrawETH: gateway calls aWETH.transferFrom — needs approve; Pool.withdraw burns directly — no approve
         approveTarget: isEth ? AAVE_WETH_GATEWAY : '',
         // receiptTokenIn: the aToken that will be burned on-chain (needed for simulation funding)
         receiptTokenIn: entry.aToken,

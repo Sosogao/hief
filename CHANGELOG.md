@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Aave WITHDRAW "invalid address" crash (2026-03-14)
+
+**Bug:** `withdraw 50 USDC from Aave` via Safe Multisig threw during solver auction:
+```
+Solver auction error: invalid address (argument="address", value="")
+```
+
+**Root cause:** `needsApproval` in `AaveV3Adapter._quoteWithdraw` was `!isEth` (inverted).
+For ERC-20 WITHDRAW: `isEth=false` → `needsApproval=true` + `approveTarget=''` → `buildCalls` tried `approve('', amount)` → ethers threw invalid address.
+
+| Path | Was | Correct |
+|------|-----|---------|
+| ERC-20 WITHDRAW (`Pool.withdraw`) | `needsApproval=true`, `approveTarget=''` | `needsApproval=false` — Pool calls `aToken.burn(msg.sender)` directly, no transferFrom |
+| ETH WITHDRAW (`WETHGateway.withdrawETH`) | `needsApproval=false` | `needsApproval=true` — Gateway calls `aWETH.transferFrom(msg.sender, ...)`, needs approve |
+
+**Fix:** `packages/solver-network/src/defiSkills.ts`: `needsApproval: !isEth` → `needsApproval: isEth`
+
+---
+
 ### Added — DeFi Protocol Plugin System + Aave v3 DEPOSIT/WITHDRAW (2026-03-14)
 
 #### Plugin Architecture (`packages/solver-network/src/defiSkills.ts`)
