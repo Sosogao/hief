@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Aave ERC-20 WITHDRAW: use hardhat_impersonateAccount (2026-03-14)
+
+**Root cause (v2)**: The DEPOSIT credits aTokens to `intent.smartAccount` (user's wallet), NOT the
+settlement wallet. Any approach that pre-funds the settlement wallet with aTokens is fundamentally
+wrong. Fix: impersonate the user's smart account on the Tenderly fork to execute the withdrawal from
+the account that actually holds the aTokens.
+
+**Changes in `packages/solver-network/src/server.ts`:**
+
+- `settleOnChain`: ERC-20 WITHDRAW now impersonates `intent.smartAccount` on the Tenderly fork
+  (`hardhat_impersonateAccount` / `hardhat_stopImpersonatingAccount`), gives it 0.1 ETH for gas,
+  then calls `Pool.withdraw` from the user's own account. Removed the pre-supply approach.
+- `simulateSettlement`: ERC-20 WITHDRAW simulation now uses `from: intent.smartAccount` directly
+  (single-tx). The user's smart account holds real aUSDC after the prior DEPOSIT, so the simulation
+  passes without any pre-funding. Removed the 3-tx bundle approach.
+
+---
+
 ### Fixed — Aave ERC-20 WITHDRAW revert on Tenderly fork (2026-03-14)
 
 **Root cause**: `tenderly_setErc20Balance` silently fails for aTokens (scaled balance storage), leaving

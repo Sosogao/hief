@@ -495,7 +495,6 @@ async function simulateSettlement(
 
   try {
     const approveIface = new ethers.Interface(['function approve(address spender, uint256 amount) returns (bool)']);
-    const supplyIface  = new ethers.Interface(['function supply(address,uint256,address,uint16)']);
 
     if (skillQ?.needsApproval) {
       // ── Aave ERC-20 deposit: approve + supply must be simulated as a bundle ──
@@ -530,39 +529,31 @@ async function simulateSettlement(
         }
       }
     } else if (skillQ?.skill === 'WITHDRAW' && skillQ.value === 0n) {
-      // ── Aave ERC-20 WITHDRAW: pre-supply to get aTokens, then withdraw ──
-      // aToken scaled-balance can't be spoofed via state override; supply first on the fork.
-      const underlyingToken = inputToken;
-      const approveData = approveIface.encodeFunctionData('approve', [skillQ.contractTo, skillQ.amountIn * 2n]);
-      const supplyData  = supplyIface.encodeFunctionData('supply', [underlyingToken, skillQ.amountIn, simFrom, 0]);
-      const bundlePayload = {
-        jsonrpc: '2.0', method: 'tenderly_simulateBundle',
-        params: [[
-          { from: simFrom, to: underlyingToken,    data: approveData,    value: '0x0', gas: '0x15F90' },
-          { from: simFrom, to: skillQ.contractTo,  data: supplyData,     value: '0x0', gas: '0x5B8D8' },
-          { from: simFrom, to: skillQ.contractTo,  data: skillQ.calldata,value: '0x0', gas: '0x5B8D8' },
-        ], 'latest'],
+      // ── ERC-20 WITHDRAW: simulate from user's smart account (which holds the aTokens) ──
+      // The DEPOSIT credited aTokens to intent.smartAccount, not the settlement wallet.
+      // Simulating from the user's account avoids any aToken pre-funding complexity.
+      const withdrawSimFrom = intent?.smartAccount || intent?.sender || simFrom;
+      const simPayload = {
+        jsonrpc: '2.0', method: 'tenderly_simulateTransaction',
+        params: [{ from: withdrawSimFrom, to: skillQ.contractTo, data: skillQ.calldata, value: '0x0', gas: '0x7A120' }, 'latest'],
         id: 1,
       };
-      const bundleRes  = await fetch(TENDERLY_RPC_URL, {
+      const simRes  = await fetch(TENDERLY_RPC_URL, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bundlePayload), signal: AbortSignal.timeout(8000),
+        body: JSON.stringify(simPayload), signal: AbortSignal.timeout(8000),
       });
-      const bundleJson = await bundleRes.json() as any;
-      if (bundleJson.error) {
+      const simJson = await simRes.json() as any;
+      if (simJson.error) {
         simSuccess = false;
-        simError = bundleJson.error?.message || String(bundleJson.error);
-      } else if (Array.isArray(bundleJson.result)) {
-        const results = bundleJson.result as any[];
-        // Only count the withdraw tx gas (last step), not the setup steps
-        gasUsed = parseInt(results[results.length - 1]?.gasUsed || '0', 16) || 250_000;
-        simulatedBlock = parseInt(results[results.length - 1]?.blockNumber || '0x0', 16);
-        simSuccess = results.every((r: any) => r.status === true);
+        simError = simJson.error?.message || String(simJson.error);
+      } else {
+        const result = simJson.result || {};
+        gasUsed = parseInt(result.gasUsed || '0x3D090', 16);
+        simulatedBlock = parseInt(result.blockNumber || '0x0', 16);
+        simSuccess = result.status === true;
         if (!simSuccess) {
-          const failed = results.find((r: any) => r.status !== true);
-          simError = failed?.error?.message
-            || failed?.revert_reason
-            || 'Transaction reverted — could not complete WITHDRAW simulation';
+          simError = result.error?.message || result.revert_reason
+            || 'WITHDRAW simulation failed — ensure you have deposited funds first';
         }
       }
     } else {
@@ -646,71 +637,73 @@ async function settleOnChain(
   let approveTxHash: string | undefined;
 
   if (skillQ) {
-    // ── DeFi skill execution (e.g. Aave deposit) ────────────────────────────
+    // ── DeFi skill execution (e.g. Aave deposit / withdraw) ─────────────────
     console.log(`[Settlement] ${skillQ.skill} via ${skillQ.protocol} | in: ${amountIn} → ${skillQ.tokenOutSymbol}`);
 
     const isEthIn = skillQ.value > 0n;
-    if (isEthIn) {
-      const needed = skillQ.value + ethers.parseEther('0.05');
-      await provider.send('tenderly_setBalance', [[wallet.address], '0x' + needed.toString(16)]);
-    } else if (skillQ.skill === 'WITHDRAW' && skillQ.value === 0n) {
-      // ERC-20 WITHDRAW: aToken scaled-balance can't be set via tenderly_setErc20Balance.
-      // Pre-fund by: set underlying balance → approve underlying → supply → wallet gets real aTokens.
+
+    if (skillQ.skill === 'WITHDRAW' && !isEthIn) {
+      // ── ERC-20 WITHDRAW: impersonate user's smart account which holds the aTokens ──
+      // The DEPOSIT credited aTokens to intent.smartAccount, not the settlement wallet.
+      // Impersonation is the clean way to spend those aTokens without a private key.
+      const userAccount = intent.smartAccount || intent.sender;
+      if (!userAccount) throw new Error('[Settlement] WITHDRAW requires intent.smartAccount or sender');
+      // Give the user account ETH for gas (fork-only)
+      await provider.send('tenderly_setBalance', [[userAccount], '0x' + ethers.parseEther('0.1').toString(16)]);
+      // Unlock account on the Tenderly fork
+      await provider.send('hardhat_impersonateAccount', [userAccount]);
       try {
-        await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
-      } catch {
-        console.warn('[Settlement] tenderly_setErc20Balance unavailable for underlying');
+        const impersonatedSigner = await provider.getSigner(userAccount);
+        const skillTx = await impersonatedSigner.sendTransaction({
+          to:       skillQ.contractTo,
+          data:     skillQ.calldata,
+          value:    0n,
+          gasLimit: 400_000n,
+        });
+        const receipt = await skillTx.wait();
+        txHash      = skillTx.hash;
+        blockNumber = receipt?.blockNumber ?? 0;
+        console.log(`[Settlement] ✅ WITHDRAW tx (impersonated ${userAccount.slice(0, 10)}...): ${txHash} | block: ${blockNumber}`);
+      } finally {
+        await provider.send('hardhat_stopImpersonatingAccount', [userAccount]).catch(() => {});
       }
-      const ethBal = await provider.getBalance(wallet.address);
-      if (ethBal < ethers.parseEther('0.05')) {
-        await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers.parseEther('0.1').toString(16)]);
+    } else {
+      // ── All other skills: fund settlement wallet, then execute ───────────────
+      if (isEthIn) {
+        const needed = skillQ.value + ethers.parseEther('0.05');
+        await provider.send('tenderly_setBalance', [[wallet.address], '0x' + needed.toString(16)]);
+      } else {
+        try {
+          await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
+        } catch {
+          console.warn('[Settlement] tenderly_setErc20Balance unavailable, proceeding without prefunding');
+        }
+        const ethBal = await provider.getBalance(wallet.address);
+        if (ethBal < ethers.parseEther('0.01')) {
+          await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers.parseEther('0.1').toString(16)]);
+        }
+        // Approve token spending (e.g. USDC → Aave Pool, or aWETH → Gateway)
+        if (skillQ.needsApproval) {
+          const approveToken = skillQ.receiptTokenIn ?? tokenIn;
+          const erc20 = new ethers.Contract(approveToken, ['function approve(address,uint256) returns (bool)'], wallet);
+          const approveTxObj = await erc20.approve(skillQ.approveTarget, amountIn);
+          const approveReceipt = await approveTxObj.wait();
+          approveTxHash = approveTxObj.hash;
+          console.log(`[Settlement] ✅ Approve tx: ${approveTxHash} | block: ${approveReceipt?.blockNumber}`);
+        }
       }
-      // approve underlying to the protocol pool (skillQ.contractTo = Aave Pool for ERC-20 WITHDRAW)
-      const erc20 = new ethers.Contract(tokenIn, ['function approve(address,uint256) returns (bool)'], wallet);
-      const approveForSupply = await erc20.approve(skillQ.contractTo, amountIn * 2n);
-      await approveForSupply.wait();
-      // supply underlying to acquire real aTokens on the fork
-      const supplyIface = new ethers.Interface(['function supply(address,uint256,address,uint16)']);
-      const preSupplyTx = await wallet.sendTransaction({
-        to: skillQ.contractTo,
-        data: supplyIface.encodeFunctionData('supply', [tokenIn, amountIn, wallet.address, 0]),
-        value: 0n,
+
+      const skillTx = await wallet.sendTransaction({
+        to:       skillQ.contractTo,
+        data:     skillQ.calldata,
+        value:    skillQ.value,
         gasLimit: 400_000n,
       });
-      await preSupplyTx.wait();
-      console.log(`[Settlement] ✅ Pre-supply complete — wallet now holds aTokens for WITHDRAW`);
-    } else {
-      // Standard ERC-20 (DEPOSIT or ETH-WITHDRAW prefund)
-      try {
-        await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
-      } catch {
-        console.warn('[Settlement] tenderly_setErc20Balance unavailable, proceeding without prefunding');
-      }
-      const ethBal = await provider.getBalance(wallet.address);
-      if (ethBal < ethers.parseEther('0.01')) {
-        await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers.parseEther('0.1').toString(16)]);
-      }
-      // Approve token spending (e.g. USDC → Aave Pool, or aWETH → Gateway) — surface hash so UI can show it
-      if (skillQ.needsApproval) {
-        const approveToken = skillQ.receiptTokenIn ?? tokenIn;
-        const erc20 = new ethers.Contract(approveToken, ['function approve(address,uint256) returns (bool)'], wallet);
-        const approveTxObj = await erc20.approve(skillQ.approveTarget, amountIn);
-        const approveReceipt = await approveTxObj.wait();
-        approveTxHash = approveTxObj.hash;
-        console.log(`[Settlement] ✅ Approve tx: ${approveTxHash} | block: ${approveReceipt?.blockNumber}`);
-      }
+      const receipt = await skillTx.wait();
+      txHash      = skillTx.hash;
+      blockNumber = receipt?.blockNumber ?? 0;
+      console.log(`[Settlement] ✅ ${skillQ.skill} tx: ${txHash} | block: ${blockNumber}`);
     }
-
-    const skillTx = await wallet.sendTransaction({
-      to:       skillQ.contractTo,
-      data:     skillQ.calldata,
-      value:    skillQ.value,
-      gasLimit: 400_000n,
-    });
-    const receipt = await skillTx.wait();
-    txHash      = skillTx.hash;
-    blockNumber = receipt?.blockNumber ?? 0;
-    console.log(`[Settlement] ✅ ${skillQ.skill} tx: ${txHash} | block: ${blockNumber}`);
   } else if (swapQ) {
     // ── Real swap via winning DEX protocol ──────────────────────────────────
     console.log(`[Settlement] Real swap via ${swapQ.protocol} | in: ${amountIn} | out: ${swapQ.amountOut}`);
