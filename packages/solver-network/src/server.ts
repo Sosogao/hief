@@ -429,7 +429,9 @@ export interface SimulationResult {
 
 async function simulateSettlement(
   intent: any,
-  winner: any
+  winner: any,
+  /** For MULTISIG/ERC4337 the Safe itself is msg.sender — simulate from its address */
+  overrideSimFrom?: string,
 ): Promise<SimulationResult> {
   const inputToken  = (intent.input?.token  || '').toLowerCase();
   const outputToken = (intent.outputs?.[0]?.token || '').toLowerCase();
@@ -451,7 +453,7 @@ async function simulateSettlement(
   const inUSD  = parseFloat(amountInHuman)  * getTokenPrice(inputSymbol);
 
   // Use Tenderly fork just for gas estimation
-  const simFrom = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY).address;
+  const simFrom = overrideSimFrom ?? new ethers.Wallet(SETTLEMENT_PRIVATE_KEY).address;
 
   let gasUsed = 250_000;
   let simulatedBlock = 0;
@@ -831,7 +833,9 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
         // Step 2: Simulate settlement (both modes run simulation first)
         console.log(`[Simulation] Running pre-settlement simulation for ${intentId.slice(0, 16)}... (mode: ${executionMode})`);
         try {
-          const simResult = await simulateSettlement(intent, winner);
+          // For Safe-based modes the Safe itself is msg.sender — simulate from its address
+          const simOverride = (executionMode === 'MULTISIG' || executionMode === 'ERC4337_SAFE') ? smartAccount : undefined;
+          const simResult = await simulateSettlement(intent, winner, simOverride);
 
           if (executionMode === 'MULTISIG' && accountInfo?.isSafe) {
             // ─── MULTISIG MODE ────────────────────────────────────────────────────
@@ -1581,10 +1585,36 @@ app.post('/v1/solver-network/multisig-collect-signature/:intentId', async (req: 
     return;
   }
 
-  const { safeTxData, aiSignature, aiSignerAddress, accountInfo } = pending;
+  const { safeTxData, aiSignature, aiSignerAddress, accountInfo, intent, winner } = pending;
 
   try {
     console.log(`[SafeMultisig] Co-signer signature received from ${coSignerAddress.slice(0, 10)}... | Executing Safe TX on-chain...`);
+
+    // ── Pre-fund the Safe on Tenderly fork ─────────────────────────────────────
+    // In MULTISIG mode the Safe itself is msg.sender for approve + supply calls,
+    // so it needs the input token balance and ETH for gas — not the settlement wallet.
+    const safeProvider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+    const safeAddress  = accountInfo!.address;
+    const skillQ       = winner?.defiSkillQuote as DefiSkillQuote | undefined;
+    const tokenIn      = intent?.input?.token || '';
+    const amountIn     = BigInt(intent?.input?.amount || '0');
+
+    if (skillQ && tokenIn && amountIn > 0n) {
+      // Fund Safe with input token (e.g. USDC for Aave deposit)
+      try {
+        await safeProvider.send('tenderly_setErc20Balance', [tokenIn, safeAddress, '0x' + (amountIn * 2n).toString(16)]);
+        console.log(`[SafeMultisig] Funded Safe ${safeAddress.slice(0, 10)}... with ${amountIn * 2n} wei of ${tokenIn}`);
+      } catch {
+        console.warn('[SafeMultisig] tenderly_setErc20Balance unavailable — Safe may lack token balance');
+      }
+    }
+    // Ensure Safe has ETH for gas
+    const safeBal = await safeProvider.getBalance(safeAddress);
+    if (safeBal < ethers.parseEther('0.01')) {
+      await safeProvider.send('tenderly_setBalance', [[safeAddress], '0x' + ethers.parseEther('0.1').toString(16)]);
+      console.log(`[SafeMultisig] Funded Safe with 0.1 ETH for gas`);
+    }
+    // ──────────────────────────────────────────────────────────────────────────
 
     const { txHash, blockNumber } = await executeWithSignatures({
       safeAddress: accountInfo!.address,
