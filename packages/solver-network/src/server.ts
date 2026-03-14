@@ -774,8 +774,24 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
 
   console.log(`[SolverNetwork] Auction started for ${intentId.slice(0, 16)}... | ${inputAmount} ${inputToken} → ${outputToken} (~$${inputAmountUSD.toFixed(2)})`);
 
+  // Filter solvers by user's stated protocol (only for DeFi skill intents)
+  // e.g. "deposit USDC to fxSAVE" → only run fx-protocol adapter, skip Aave
+  const protocolHint = (enrichedIntent.meta?.uiHints as any)?.protocol as string | undefined;
+  const skillHint = getIntentSkillType(enrichedIntent);
+  const activeSolvers = (skillHint && protocolHint && protocolHint !== 'auto')
+    ? SOLVER_PERSONAS.filter(s => {
+        const adapter = defiRegistry.getAll().find(a => a.name === s.protocol);
+        if (!adapter) return false; // skip DEX solvers for explicit-protocol skill intents
+        return adapter.id.startsWith(protocolHint) || adapter.name.toLowerCase().includes(protocolHint.toLowerCase());
+      })
+    : SOLVER_PERSONAS;
+
+  if (skillHint && protocolHint && protocolHint !== 'auto') {
+    console.log(`[SolverNetwork] Protocol hint "${protocolHint}" → ${activeSolvers.length} solver(s) active`);
+  }
+
   // All solvers quote in parallel
-  const quotePromises = SOLVER_PERSONAS.map(solver =>
+  const quotePromises = activeSolvers.map(solver =>
     generateQuote(solver, enrichedIntent, inputAmountUSD, outputToken)
       .catch(err => ({
         solverId: solver.id,

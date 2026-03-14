@@ -177,7 +177,11 @@ export class IntentParser {
     const isSkill    = isDeposit || isWithdraw || isStake || isUnstake;
 
     let outputTokenAddress = '0x0000000000000000000000000000000000000000'; // filled by solver
-    let outputTokenSymbol  = isDeposit ? `a${inputTokenInfo.symbol}`
+    const protocolHint = params.protocol?.toLowerCase();
+    let outputTokenSymbol  = isDeposit ? (
+                               protocolHint === 'fx' || protocolHint === 'fxsave' ? 'fxSAVE' :
+                               `a${inputTokenInfo.symbol}`
+                             )
                            : isStake   ? `st${inputTokenInfo.symbol}`
                            : '';
 
@@ -281,6 +285,7 @@ export class IntentParser {
           outputTokenSymbol,
           inputAmountHuman: params.inputAmount,
           protocol: params.protocol ?? (isStake || isUnstake ? 'lido' : isDeposit || isWithdraw ? 'aave' : 'auto'),
+          // Note: 'aave' is the default protocol for DEPOSIT/WITHDRAW when none specified
         },
       },
     };

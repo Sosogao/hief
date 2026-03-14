@@ -153,6 +153,50 @@ Response:
   "rawIntent": "withdraw 50 USDC from Aave"
 }
 
+User: "deposit 100 USDC to fxSAVE"
+Response:
+{
+  "intentType": "DEPOSIT",
+  "confidence": 0.97,
+  "params": {
+    "inputToken": "USDC",
+    "inputAmount": "100",
+    "outputToken": "fxSAVE",
+    "minOutputAmount": null,
+    "slippageBps": 0,
+    "deadline": null,
+    "targetChain": null,
+    "protocol": "fx",
+    "extraParams": {}
+  },
+  "missingFields": [],
+  "clarificationNeeded": false,
+  "clarificationQuestion": null,
+  "rawIntent": "deposit 100 USDC to fxSAVE"
+}
+
+User: "withdraw 50 USDC from fxSAVE"
+Response:
+{
+  "intentType": "WITHDRAW",
+  "confidence": 0.97,
+  "params": {
+    "inputToken": "USDC",
+    "inputAmount": "50",
+    "outputToken": "USDC",
+    "minOutputAmount": null,
+    "slippageBps": 0,
+    "deadline": null,
+    "targetChain": null,
+    "protocol": "fx",
+    "extraParams": {}
+  },
+  "missingFields": [],
+  "clarificationNeeded": false,
+  "clarificationQuestion": null,
+  "rawIntent": "withdraw 50 USDC from fxSAVE"
+}
+
 User: "帮我把以太换成USDC"
 Response:
 {

@@ -7,6 +7,138 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Intent parser misroutes fxSAVE to Aave (2026-03-15)
+
+**Root cause**: Three compounding bugs:
+1. System prompt had rule 3c for fxSAVE detection but no concrete JSON example → `gpt-4.1-mini` ignored it and returned `protocol: null`, falling to `?? 'aave'` default.
+2. `intentParser.ts` output token symbol hardcoded `a${symbol}` prefix for all DEPOSITs regardless of protocol.
+3. Solver auction ran all adapters in parallel and selected highest APY — if Aave APY > fxSAVE, Aave won even when user explicitly said "fxSAVE".
+
+**Changes:**
+
+`packages/agent/src/prompts/systemPrompt.ts`:
+- Added concrete JSON examples for "deposit 100 USDC to fxSAVE" and "withdraw 50 USDC from fxSAVE" showing `protocol: "fx"`, `outputToken: "fxSAVE"` / `"USDC"` — few-shot examples are the most reliable way to teach `gpt-4.1-mini` edge cases.
+
+`packages/agent/src/parser/intentParser.ts`:
+- Output token symbol is now protocol-aware: `protocol === 'fx'` → `outputTokenSymbol = 'fxSAVE'` instead of `aUSDC`.
+
+`packages/agent/src/conversation/conversationEngine.ts`:
+- `buildFallbackConfirmation` and `buildExecutionMessage`: Added `isFxSave` and `isLido` branches so confirmation messages show the correct protocol name and receipt token. Previously all DEPOSITs showed "Aave v3".
+
+`packages/solver-network/src/server.ts`:
+- Auction now filters solvers by `intent.meta.uiHints.protocol` before running. When user says "fxSAVE", only `fx-protocol` adapter is invited; Aave is excluded. Filter is bypassed for SWAP intents and when protocol is `'auto'`.
+
+---
+
+### Added — DeFi Skill Market + FX Protocol (fxSAVE) adapter (2026-03-15)
+
+**Architecture: Open DeFi Skill Market**
+
+HIEF now defines a two-layer plugin model:
+- **`DefiProtocolAdapter`** (existing): on-chain execution interface — `quote()` + `buildCalls()`
+- **`SkillManifest`** (new): off-chain metadata layer — version, tokens, chains, skill source URL
+
+Any DeFi protocol can publish a `SKILL.md` (like [fx-sdk-skill](https://github.com/AladdinDAO/fx-sdk-skill)) and integrate into HIEF by implementing the adapter. Goal: upgrade from "AI wallet" to **open AI DeFi Intent Infrastructure**.
+
+**New files:**
+
+`packages/solver-network/src/skillMarket.ts`:
+- `SkillManifest` interface: `id`, `name`, `version`, `description`, `skillSourceUrl`, `supportedSkills`, `supportedTokens`, `chainIds`, `sdk?`, `author?`
+- `SkillMarket` singleton: `register(manifest, adapter)`, `list()`, `get(id)`
+
+`packages/solver-network/src/adapters/fxProtocol.ts`:
+- `FxProtocolAdapter` — first third-party skill integration
+- Uses `@aladdindao/fx-sdk` v1.0.5: `FxSdk.depositFxSave()` / `withdrawFxSave()` / `getFxSaveConfig()`
+- DEPOSIT: USDC → fxSAVE (approve + deposit via SDK)
+- WITHDRAW: fxSAVE → USDC (converts shares via `totalAssetsWei / totalSupplyWei` exchange rate, instant=true)
+- Supported tokens: USDC + fxUSD
+
+`.claude/skills/fx-protocol/SKILL.md`:
+- HIEF-format Claude Code skill — references upstream `https://github.com/AladdinDAO/fx-sdk-skill`
+
+**Modified files:**
+
+`packages/solver-network/src/defiSkills.ts`:
+- Added `skillSource?: string` field to `DefiProtocolAdapter` interface
+- Registers FX Protocol via `skillMarket.register()`
+
+`packages/solver-network/src/server.ts`:
+- `GET /v1/solver-network/skills` — list all registered skill manifests
+- `GET /v1/solver-network/skills/:id` — detail for one manifest
+
+`packages/solver-network/package.json`:
+- Added `@aladdindao/fx-sdk: ^1.0.5`
+
+`packages/agent/src/prompts/systemPrompt.ts`:
+- Added f(x) Protocol to supported protocols and intent recognition rules
+
+`apps/explorer/index.html`:
+- Added "deposit 100 USDC to fxSAVE" and "withdraw 50 USDC from fxSAVE" quick suggestion buttons
+
+---
+
+### Refactored — Remove all auto-funding from tx paths, add /faucet endpoint (2026-03-14)
+
+**Root cause**: `tenderly_setBalance` / `tenderly_setErc20Balance` RPC calls were appearing as state-mutation transactions in the Tenderly fork explorer, polluting the real transaction history and masking actual DeFi call behavior.
+
+**Policy**: All auto-funding is removed from `settleOnChain`, `simulateSettlement`, `multisig-collect-signature`, and `safe4337-collect-signature`. If an account lacks funds, the transaction fails — the user funds accounts explicitly via the faucet.
+
+**Changes in `packages/solver-network/src/server.ts`:**
+
+- `settleOnChain`: Completely rewritten to use `hardhat_impersonateAccount` + `eth_sendTransaction` for user addresses (EOA/Safe), with a `sendRaw` helper that dispatches to either impersonated RPC or settlement wallet.
+- Removed `tenderly_setBalance` / `tenderly_setErc20Balance` from all execution paths.
+- `simulateSettlement`: Removed pre-funding block guarded by `ENABLE_TENDERLY_AUTOFUND`.
+- `multisig-collect-signature`: Removed Safe pre-funding.
+- `safe4337-collect-signature`: Removed Safe pre-funding.
+- Added `FAUCET_TOKENS` constant (ETH, WETH, USDC, USDT, DAI).
+- Added `POST /v1/solver-network/faucet` endpoint — explicit, user-triggered only.
+
+---
+
+### Added — Default EOA wallet + Faucet UI panel (2026-03-14)
+
+**Changes in `apps/explorer/index.html`:**
+
+- Default `chatWallet` changed to `0x7d73932636FbC0E57448BA175AbCd800C60daE5F`
+- Added collapsible faucet panel with:
+  - Address input (pre-filled when opened from a wallet card)
+  - Per-token checkboxes + amount inputs: ETH (0.5), USDC (1000), WETH (1), USDT (1000), DAI (1000)
+  - "💧 Fund Address" button calls `POST /v1/solver-network/faucet`
+- Wallet cards now show "💧 Faucet" button to open panel pre-filled with that wallet's address
+- New JS functions: `toggleFaucetPanel`, `hideFaucetPanel`, `openFaucetForAddress`, `faucetUseSelectedWallet`, `doFaucet`, `setFaucetStatus`
+
+**Changes in `packages/solver-network/src/server.ts`:**
+
+- `TEST_WALLETS` EOA address updated to `0x7d73932636FbC0E57448BA175AbCd800C60daE5F`
+
+---
+
+### Fixed — EOA DIRECT mode uses settlement wallet instead of user address (2026-03-14)
+
+**Root cause**: The DIRECT execute handler did not pass the user's address to `settleOnChain`. Additionally, ethers v6 `provider.getSigner(address)` fails for impersonated accounts not in `eth_accounts`, throwing "invalid account".
+
+**Fix**: Replaced `provider.getSigner()` + `.sendTransaction()` with direct `provider.send('eth_sendTransaction', [{from, to, data, value, gas}])` RPC call. Tenderly honors `hardhat_impersonateAccount` at the RPC level; ethers account validation is bypassed entirely.
+
+**Changes in `packages/solver-network/src/server.ts`:**
+
+- DIRECT execute handler: `userAddr = intent.sender || intent.smartAccount || accountInfo?.address` passed to `settleOnChain`
+- `settleOnChain`: unified impersonated + settlement-wallet paths via `sendRaw` helper
+- `simOverride` now applies to all wallet modes (previously only MULTISIG / ERC4337_SAFE)
+
+---
+
+### Fixed — Safe4337 UserOperation callGasLimit too low for USDC deposit (2026-03-14)
+
+**Root cause**: `callGasLimit = 200_000` insufficient for the full Safe4337 call chain: `executeUserOp → execTransactionFromModule → MultiSend → approve + Pool.supply` (~260k gas).
+
+**Changes in `packages/solver-network/src/safe4337.ts`:**
+
+- `callGasLimit`: `200_000n` → `500_000n`
+- Error message now includes both UserOpHash and handleOps txHash:
+  `UserOperation failed on-chain. UserOpHash: ${userOpHash} | handleOps txHash: ${receipt.hash}`
+
+---
+
 ### Fixed — Aave ERC-20 WITHDRAW: use hardhat_impersonateAccount (2026-03-14)
 
 **Root cause (v2)**: The DEPOSIT credits aTokens to `intent.smartAccount` (user's wallet), NOT the

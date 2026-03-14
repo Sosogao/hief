@@ -342,7 +342,21 @@ export class ConversationEngine {
   ): string {
     const uiHints = (intent.meta?.uiHints ?? {}) as Record<string, string>;
     const protocol = uiHints.protocol ?? 'auto';
-    const isDeposit = protocol === 'aave' || outputSymbol.startsWith('a');
+    const isFxSave  = protocol === 'fx' || outputSymbol === 'fxSAVE';
+    const isDeposit = !isFxSave && (protocol === 'aave' || outputSymbol.startsWith('a'));
+    const isLido    = protocol === 'lido' || outputSymbol === 'stETH';
+
+    if (isFxSave) {
+      const action = outputSymbol === 'USDC' ? 'Withdraw' : 'Deposit';
+      return `📋 **Transaction Summary**
+
+💰 ${action} **${inputAmountHuman} ${inputSymbol}** → **${outputSymbol}** (f(x) Protocol)
+🌐 Network: ${chain}
+📈 Earn yield via fxSAVE — no slippage, 1:1 ratio
+🏦 Protocol: f(x) Protocol (AladdinDAO)
+
+Reply **yes** to confirm or **no** to cancel.`;
+    }
 
     if (isDeposit) {
       return `📋 **Transaction Summary**
@@ -351,6 +365,17 @@ export class ConversationEngine {
 🌐 Network: ${chain}
 📈 Earn yield — no slippage, 1:1 ratio
 🏦 Protocol: Aave v3 (lending & borrowing)
+
+Reply **yes** to confirm or **no** to cancel.`;
+    }
+
+    if (isLido) {
+      return `📋 **Transaction Summary**
+
+💰 Stake **${inputAmountHuman} ${inputSymbol}** → **${outputSymbol}** (Lido)
+🌐 Network: ${chain}
+📈 Earn ETH staking rewards — no slippage
+🏦 Protocol: Lido (liquid staking)
 
 Reply **yes** to confirm or **no** to cancel.`;
     }
@@ -371,7 +396,20 @@ Reply **yes** to confirm or **no** to cancel.`;
     const outputSymbol = uiHints2.outputTokenSymbol ?? 'tokens';
     const inputAmountHuman = uiHints2.inputAmountHuman ?? intent.input.amount;
     const protocol = uiHints2.protocol ?? 'auto';
-    const isDeposit = protocol === 'aave' || outputSymbol.startsWith('a');
+    const isFxSave2  = protocol === 'fx' || outputSymbol === 'fxSAVE';
+    const isDeposit = !isFxSave2 && (protocol === 'aave' || outputSymbol.startsWith('a'));
+
+    if (isFxSave2) {
+      const action = outputSymbol === 'USDC' ? 'Withdraw' : 'Deposit';
+      return `✅ **Intent confirmed!**
+
+Your intent has been submitted:
+- **Intent ID**: \`${intent.intentId.slice(0, 16)}...\`
+- **Action**: ${action} ${inputAmountHuman} ${inputSymbol} → ${outputSymbol} (f(x) Protocol)
+- **Status**: Preparing fxSAVE transaction...
+
+You'll receive a transaction to sign shortly.`;
+    }
 
     if (isDeposit) {
       return `✅ **Intent confirmed!**
