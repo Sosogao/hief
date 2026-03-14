@@ -251,9 +251,12 @@ export async function buildSafe4337UserOperation(params: {
   const maxFeePerGas = feeData.maxFeePerGas ?? ethers.parseUnits('20', 'gwei');
   const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ?? ethers.parseUnits('1', 'gwei');
 
-  // Gas limits (conservative estimates for Safe4337 execution)
+  // Gas limits for Safe4337 execution.
+  // callGasLimit must cover the full inner call chain:
+  //   executeUserOp → execTransactionFromModule → MultiSend → approve + supply
+  // Aave USDC approve+supply takes ~260k gas, so 500k gives comfortable headroom.
   const verificationGasLimit = 150_000n;
-  const callGasLimit = 200_000n;
+  const callGasLimit = 500_000n;
   const preVerificationGas = 50_000n;
 
   const userOp: PackedUserOperation = {
@@ -512,7 +515,7 @@ export async function submitSafe4337UserOp(params: {
     );
     const success = decoded[1] as boolean;
     if (!success) {
-      throw new Error(`UserOperation failed on-chain. UserOpHash: ${userOpHash}`);
+      throw new Error(`UserOperation failed on-chain. UserOpHash: ${userOpHash} | handleOps txHash: ${receipt.hash}`);
     }
   }
 

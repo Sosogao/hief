@@ -615,16 +615,29 @@ async function simulateSettlement(
 /**
  * Execute settlement on Tenderly fork using real DEX swap calldata.
  *
- * The settlement wallet (SETTLEMENT_PRIVATE_KEY) is auto-funded with the input
- * token via tenderly_setErc20Balance / tenderly_setBalance so the swap executes.
- * For EOA (DIRECT) mode only — Safe/ERC-4337 modes execute via their own signing flow.
+ * When userAddress is provided (EOA DIRECT mode), the settlement is executed via
+ * hardhat_impersonateAccount so the tx appears from the user's own address, which
+ * matches on-chain semantics (tokens flow from the user, not the backend wallet).
+ * The settlement wallet (SETTLEMENT_PRIVATE_KEY) is used as fallback when no
+ * user address is given.
  */
 async function settleOnChain(
   intent: any,
-  winner: any
+  winner: any,
+  /** User's EOA address to impersonate (DIRECT mode). Omit to use settlement wallet. */
+  userAddress?: string,
 ): Promise<{ txHash: string; blockNumber: number; approveTxHash?: string }> {
   const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
   const wallet   = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY, provider);
+
+  // For EOA DIRECT mode, impersonate the user's address so the tx is sent from them.
+  const execAddress = userAddress ?? wallet.address;
+  const useImpersonation = !!userAddress;
+  if (useImpersonation) {
+    await provider.send('tenderly_setBalance', [[execAddress], '0x' + ethers.parseEther('0.1').toString(16)]);
+    await provider.send('hardhat_impersonateAccount', [execAddress]);
+  }
+  const execSigner: ethers.Signer = useImpersonation ? await provider.getSigner(execAddress) : wallet;
 
   const tokenIn  = intent.input?.token  || '';
   const amountIn = BigInt(intent.input?.amount || '0');
@@ -668,32 +681,33 @@ async function settleOnChain(
         await provider.send('hardhat_stopImpersonatingAccount', [userAccount]).catch(() => {});
       }
     } else {
-      // ── All other skills: fund settlement wallet, then execute ───────────────
+      // ── All other skills: fund executor, then execute ─────────────────────
+      const logTag = useImpersonation ? `impersonated ${execAddress.slice(0, 10)}...` : 'settlement wallet';
       if (isEthIn) {
         const needed = skillQ.value + ethers.parseEther('0.05');
-        await provider.send('tenderly_setBalance', [[wallet.address], '0x' + needed.toString(16)]);
+        await provider.send('tenderly_setBalance', [[execAddress], '0x' + needed.toString(16)]);
       } else {
         try {
-          await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
+          await provider.send('tenderly_setErc20Balance', [tokenIn, execAddress, '0x' + (amountIn * 2n).toString(16)]);
         } catch {
           console.warn('[Settlement] tenderly_setErc20Balance unavailable, proceeding without prefunding');
         }
-        const ethBal = await provider.getBalance(wallet.address);
+        const ethBal = await provider.getBalance(execAddress);
         if (ethBal < ethers.parseEther('0.01')) {
-          await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers.parseEther('0.1').toString(16)]);
+          await provider.send('tenderly_setBalance', [[execAddress], '0x' + ethers.parseEther('0.1').toString(16)]);
         }
         // Approve token spending (e.g. USDC → Aave Pool, or aWETH → Gateway)
         if (skillQ.needsApproval) {
           const approveToken = skillQ.receiptTokenIn ?? tokenIn;
-          const erc20 = new ethers.Contract(approveToken, ['function approve(address,uint256) returns (bool)'], wallet);
+          const erc20 = new ethers.Contract(approveToken, ['function approve(address,uint256) returns (bool)'], execSigner);
           const approveTxObj = await erc20.approve(skillQ.approveTarget, amountIn);
           const approveReceipt = await approveTxObj.wait();
           approveTxHash = approveTxObj.hash;
-          console.log(`[Settlement] ✅ Approve tx: ${approveTxHash} | block: ${approveReceipt?.blockNumber}`);
+          console.log(`[Settlement] ✅ Approve tx (${logTag}): ${approveTxHash} | block: ${approveReceipt?.blockNumber}`);
         }
       }
 
-      const skillTx = await wallet.sendTransaction({
+      const skillTx = await execSigner.sendTransaction({
         to:       skillQ.contractTo,
         data:     skillQ.calldata,
         value:    skillQ.value,
@@ -702,40 +716,39 @@ async function settleOnChain(
       const receipt = await skillTx.wait();
       txHash      = skillTx.hash;
       blockNumber = receipt?.blockNumber ?? 0;
-      console.log(`[Settlement] ✅ ${skillQ.skill} tx: ${txHash} | block: ${blockNumber}`);
+      console.log(`[Settlement] ✅ ${skillQ.skill} tx (${logTag}): ${txHash} | block: ${blockNumber}`);
     }
   } else if (swapQ) {
     // ── Real swap via winning DEX protocol ──────────────────────────────────
     console.log(`[Settlement] Real swap via ${swapQ.protocol} | in: ${amountIn} | out: ${swapQ.amountOut}`);
+    const logTag = useImpersonation ? `impersonated ${execAddress.slice(0, 10)}...` : 'settlement wallet';
+    const swapIsEthIn = swapQ.swapValue > 0n;
 
-    const isEthIn = swapQ.swapValue > 0n;
-
-    // Fund the wallet with input asset on the Tenderly fork
-    if (isEthIn) {
+    // Fund the executor with input asset on the Tenderly fork
+    if (swapIsEthIn) {
       const needed = swapQ.swapValue + ethers.parseEther('0.05'); // extra for gas
-      await provider.send('tenderly_setBalance', [[wallet.address], '0x' + needed.toString(16)]);
+      await provider.send('tenderly_setBalance', [[execAddress], '0x' + needed.toString(16)]);
     } else {
       // ERC-20 input: set token balance via tenderly_setErc20Balance
       try {
-        await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
+        await provider.send('tenderly_setErc20Balance', [tokenIn, execAddress, '0x' + (amountIn * 2n).toString(16)]);
       } catch {
-        // tenderly_setErc20Balance not available — try setStorageAt for slot 0/1 (USDC slot 9)
         console.warn('[Settlement] tenderly_setErc20Balance unavailable, proceeding without prefunding');
       }
       // Ensure ETH for gas
-      const ethBal = await provider.getBalance(wallet.address);
+      const ethBal = await provider.getBalance(execAddress);
       if (ethBal < ethers.parseEther('0.01')) {
-        await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers.parseEther('0.1').toString(16)]);
+        await provider.send('tenderly_setBalance', [[execAddress], '0x' + ethers.parseEther('0.1').toString(16)]);
       }
 
       // Approve router for ERC-20 swap
-      const erc20 = new ethers.Contract(tokenIn, ['function approve(address,uint256) returns (bool)'], wallet);
+      const erc20 = new ethers.Contract(tokenIn, ['function approve(address,uint256) returns (bool)'], execSigner);
       const approveTx = await erc20.approve(swapQ.approveTarget, amountIn * 2n);
       await approveTx.wait();
     }
 
     // Execute the swap
-    const swapTx = await wallet.sendTransaction({
+    const swapTx = await execSigner.sendTransaction({
       to: swapQ.swapTo,
       data: swapQ.swapData,
       value: swapQ.swapValue,
@@ -744,15 +757,19 @@ async function settleOnChain(
     const receipt = await swapTx.wait();
     txHash = swapTx.hash;
     blockNumber = receipt?.blockNumber ?? 0;
-    console.log(`[Settlement] ✅ Swap tx: ${txHash} | block: ${blockNumber}`);
+    console.log(`[Settlement] ✅ Swap tx (${logTag}): ${txHash} | block: ${blockNumber}`);
   } else {
     // ── Fallback: WETH wrap as proof-of-execution ───────────────────────────
-    const weth = new ethers.Contract(WETH_ADDRESS, WETH_ABI, wallet);
+    const weth = new ethers.Contract(WETH_ADDRESS, WETH_ABI, execSigner);
     const tx = await weth.deposit({ value: ethers.parseEther('0.001') });
     const r   = await tx.wait();
     txHash = tx.hash;
     blockNumber = r?.blockNumber ?? 0;
     console.log(`[Settlement] Fallback WETH wrap: ${txHash}`);
+  }
+
+  if (useImpersonation) {
+    await provider.send('hardhat_stopImpersonatingAccount', [execAddress]).catch(() => {});
   }
 
   return { txHash, blockNumber, approveTxHash };
@@ -942,8 +959,10 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
         // Step 2: Simulate settlement (both modes run simulation first)
         console.log(`[Simulation] Running pre-settlement simulation for ${intentId.slice(0, 16)}... (mode: ${executionMode})`);
         try {
-          // For Safe-based modes the Safe itself is msg.sender — simulate from its address
-          const simOverride = (executionMode === 'MULTISIG' || executionMode === 'ERC4337_SAFE') ? smartAccount : undefined;
+          // Simulate from the user's own address for all modes:
+          // - MULTISIG / ERC4337_SAFE: Safe is msg.sender
+          // - DIRECT (EOA): simulate from the user's EOA so gas estimates are accurate
+          const simOverride = smartAccount || undefined;
           const simResult = await simulateSettlement(intent, winner, simOverride);
 
           if (executionMode === 'MULTISIG' && accountInfo?.isSafe) {
@@ -1574,7 +1593,9 @@ app.post('/v1/solver-network/execute/:intentId', async (req: Request, res: Respo
     // ─── DIRECT MODE: Broadcast immediately ────────────────────────────────────────────────────
     try {
       console.log(`[Settlement] User confirmed DIRECT execution for ${intentId.slice(0, 16)}... Broadcasting real tx...`);
-      const { txHash, blockNumber, approveTxHash } = await settleOnChain(intent, winner);
+      // Impersonate the user's EOA so the tx is executed from their address, not the backend wallet
+      const userAddr = intent.sender || intent.smartAccount || accountInfo?.address;
+      const { txHash, blockNumber, approveTxHash } = await settleOnChain(intent, winner, userAddr || undefined);
       pendingSimulations.delete(intentId);
       await fetch(`${BUS_URL}/v1/intents/${intentId}/settle`, {
         method: 'POST',
@@ -1624,10 +1645,38 @@ app.post('/v1/solver-network/safe4337-collect-signature/:intentId', async (req: 
     return;
   }
 
-  const { safe4337UserOp, accountInfo } = pending;
+  const { safe4337UserOp, accountInfo, intent, winner } = pending;
 
   try {
     console.log(`[Safe4337] User signature received from ${signerAddress.slice(0, 10)}... | Submitting UserOp via EntryPoint...`);
+
+    // ── Pre-fund the Safe with tokens + ETH before submitting UserOp ────────
+    // The Safe must have the input tokens (and ETH for gas prefund to EntryPoint)
+    // when executeUserOp runs. On a Tenderly fork we set balances directly.
+    if (ENABLE_TENDERLY_AUTOFUND) {
+      const safeProvider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+      const safeAddress  = accountInfo!.address;
+      const skillQ = winner?.defiSkillQuote as DefiSkillQuote | undefined;
+      const tokenIn  = intent?.input?.token || '';
+      const amountIn = BigInt(intent?.input?.amount || '0');
+      if (skillQ && amountIn > 0n) {
+        const fundToken = skillQ.skill === 'WITHDRAW' && skillQ.receiptTokenIn
+          ? skillQ.receiptTokenIn
+          : tokenIn;
+        try {
+          await safeProvider.send('tenderly_setErc20Balance', [fundToken, safeAddress, '0x' + (amountIn * 2n).toString(16)]);
+          console.log(`[Safe4337] Fork-funded Safe ${safeAddress.slice(0, 10)}... with token ${fundToken}`);
+        } catch {
+          console.warn('[Safe4337] tenderly_setErc20Balance unavailable');
+        }
+      }
+      const safeBal = await safeProvider.getBalance(safeAddress);
+      if (safeBal < ethers.parseEther('0.05')) {
+        await safeProvider.send('tenderly_setBalance', [[safeAddress], '0x' + ethers.parseEther('0.1').toString(16)]);
+        console.log(`[Safe4337] Fork-funded Safe with 0.1 ETH for gas`);
+      }
+    }
+    // ────────────────────────────────────────────────────────────────────────
 
     const result = await executeSafe4337WithSignature({
       userOp: safe4337UserOp,
