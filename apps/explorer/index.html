@@ -125,7 +125,7 @@
     <div id="forkConfigStatus" class="text-xs mt-2 text-slate-500"></div>
     <div class="mt-2 flex flex-wrap gap-3">
       <span class="text-xs text-slate-500">Quick presets:</span>
-      <button onclick="setForkPreset('https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d', 99917)" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Mainnet Fork (99917)</button>
+      <button onclick="setForkPreset('https://virtual.mainnet.eu.rpc.tenderly.co/4a595ca5-c96a-4ad8-aeb6-b789648f9880', 99917)" class="text-xs text-indigo-400 hover:text-indigo-300 underline">HIEFMainnetFork2 (99917)</button>
       <button onclick="setForkPreset('https://virtual.base.rpc.tenderly.co/...', 84532)" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Base Fork (84532)</button>
     </div>
   </div>
@@ -1631,7 +1631,12 @@ async function saveForkConfig(retryCount) {
       _currentChainId = json.data.current.settlementChainId;
       document.getElementById('headerChainId').textContent = _currentChainId;
       document.getElementById('statChainId').textContent = _currentChainId;
-      statusEl.textContent = '✅ Applied! Fork URL and Chain ID updated.';
+      // Persist so the next page load restores this fork automatically
+      try {
+        localStorage.setItem('hief_fork_rpc', _currentForkUrl);
+        localStorage.setItem('hief_fork_chainid', String(_currentChainId));
+      } catch(e) {}
+      statusEl.textContent = '✅ Applied! Fork URL and Chain ID updated (saved as default).';
       statusEl.style.color='#4ade80';
       setTimeout(function() { toggleForkPanel(); loadTestWallets(); }, 1200);
     } else if (res.status === 503) {
@@ -1649,24 +1654,44 @@ async function saveForkConfig(retryCount) {
 
 async function loadConfig() {
   try {
+    // Restore persisted fork config from localStorage (set by saveForkConfig)
+    var savedRpc = null, savedChainId = null;
+    try {
+      savedRpc = localStorage.getItem('hief_fork_rpc');
+      savedChainId = parseInt(localStorage.getItem('hief_fork_chainid') || '', 10) || null;
+    } catch(e) {}
+
     var res = await fetch(SOLVER_API+'/v1/solver-network/config');
     var json = await res.json();
     if (json.success) {
-      _currentForkUrl = json.data.tenderlyRpcUrl;
-      var serverChainId = json.data.settlementChainId;
-      // Auto-sync: if server has wrong chainId, correct it silently
-      if (serverChainId !== CHAIN_ID) {
+      window._autofundEnabled = json.data.enableTenderlyAutofund;
+
+      // If localStorage has a saved fork, push it to server (overrides server default)
+      if (savedRpc && savedRpc.startsWith('http')) {
+        var pushBody = { tenderlyRpcUrl: savedRpc };
+        if (savedChainId) pushBody.settlementChainId = savedChainId;
         fetch(SOLVER_API+'/v1/solver-network/config', {
           method: 'POST', headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ settlementChainId: CHAIN_ID })
+          body: JSON.stringify(pushBody)
         }).catch(function(){});
-        serverChainId = CHAIN_ID;
+        _currentForkUrl = savedRpc;
+        _currentChainId = savedChainId || json.data.settlementChainId;
+      } else {
+        _currentForkUrl = json.data.tenderlyRpcUrl;
+        var serverChainId = json.data.settlementChainId;
+        // Auto-sync: if server has wrong chainId, correct it silently
+        if (serverChainId !== CHAIN_ID) {
+          fetch(SOLVER_API+'/v1/solver-network/config', {
+            method: 'POST', headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({ settlementChainId: CHAIN_ID })
+          }).catch(function(){});
+          serverChainId = CHAIN_ID;
+        }
+        _currentChainId = serverChainId;
       }
-      _currentChainId = serverChainId;
+
       document.getElementById('headerChainId').textContent = _currentChainId;
       document.getElementById('statChainId').textContent = _currentChainId;
-      // Store autofund capability
-      window._autofundEnabled = json.data.enableTenderlyAutofund;
     }
   } catch(e) {}
 }

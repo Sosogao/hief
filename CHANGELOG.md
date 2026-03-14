@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed — Default Tenderly fork to HIEFMainnetFork2 + localStorage persistence (2026-03-15)
+
+**New fork**: `HIEFMainnetFork2` — `https://virtual.mainnet.eu.rpc.tenderly.co/4a595ca5-c96a-4ad8-aeb6-b789648f9880` (chainId 99917). Previous fork had expired fxSAVE pool epoch.
+
+**Changes in `packages/solver-network/src/server.ts`:**
+- `TENDERLY_RPC_URL` default updated to new fork URL (still overridable via `TENDERLY_RPC_URL` env var or `POST /v1/solver-network/config`)
+
+**Changes in `apps/explorer/index.html`:**
+- Quick preset button updated: "HIEFMainnetFork2 (99917)"
+- `saveForkConfig()`: on success, saves `hief_fork_rpc` + `hief_fork_chainid` to `localStorage` so the configured fork persists across page reloads
+- `loadConfig()`: reads `localStorage` on page load; if a saved fork exists, pushes it to the server (overrides server default) — the user-configured fork survives both browser refresh and server restart
+
+**User workflow**: Open fork config (⚙ button) → enter new URL → Apply → that URL becomes the default. No need to re-enter after page refresh or server restart.
+
+---
+
 ### Fixed — FxSdk uses stale Tenderly fork state, FxUSDBasePool.previewDeposit reverts "expired" (2026-03-15)
 
 **Root cause**: The `FxProtocolAdapter` passed the Tenderly fork RPC URL to `FxSdk`. The fxSAVE pool (`FxUSDBasePool`) has epoch-based reward periods — when the fork is pinned to an old block, the epoch expires and `previewDeposit` reverts with `"expired"`. This caused every fxSAVE quote to silently return `null` → "no valid quotes found".

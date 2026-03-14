@@ -40,7 +40,7 @@ import {
 const PORT = parseInt(process.env.PORT || '3008', 10);
 const BUS_URL = process.env.BUS_URL || 'http://localhost:3001';
 // TENDERLY_RPC_URL is mutable at runtime via POST /v1/solver-network/config
-let TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.mainnet.eu.rpc.tenderly.co/34ba02bb-d61a-4c5b-90c6-0d2e9a8f367d';
+let TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.mainnet.eu.rpc.tenderly.co/4a595ca5-c96a-4ad8-aeb6-b789648f9880';
 let SETTLEMENT_CHAIN_ID = parseInt(process.env.SETTLEMENT_CHAIN_ID || '99917', 10);
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '15000', 10);
 // Set ENABLE_TENDERLY_AUTOFUND=true to allow auto-funding Safe accounts on Tenderly forks (dev/test only)
