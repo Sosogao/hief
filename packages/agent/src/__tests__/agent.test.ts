@@ -491,13 +491,13 @@ describe('IntentParser', () => {
     expect(resolved.resolveErrors[0]).toContain('Unknown token');
   });
 
-  test('parseAndResolve returns unsupported error for STAKE', async () => {
+  test('parseAndResolve builds valid HIEFIntent for STAKE (Lido ETH)', async () => {
     mockLLMResponse({
       intentType: 'STAKE',
-      confidence: 0.93,
+      confidence: 0.96,
       params: {
         inputToken: 'ETH',
-        inputAmount: '1',
+        inputAmount: '0.5',
         outputToken: 'stETH',
         minOutputAmount: null,
         slippageBps: null,
@@ -509,11 +509,49 @@ describe('IntentParser', () => {
       missingFields: [],
       clarificationNeeded: false,
       clarificationQuestion: null,
-      rawIntent: 'stake 1 ETH on Lido',
+      rawIntent: 'stake 0.5 ETH on Lido',
+    });
+
+    // Lido is on Ethereum mainnet (chainId 1)
+    const resolved = await parser.parseAndResolve(
+      'stake 0.5 ETH on Lido',
+      MOCK_SMART_ACCOUNT,
+      1  // Ethereum mainnet
+    );
+
+    expect(resolved.resolveErrors).toHaveLength(0);
+    const intent = resolved.hief!;
+    expect(intent.input.amount).toBe('500000000000000000'); // 0.5 ETH
+    // Output: stETH or placeholder; solver fills real stETH address
+    expect(intent.constraints.slippageBps).toBe(0); // staking is 1:1, no slippage
+    expect(intent.outputs[0].minAmount).toBe('500000000000000000'); // min = input
+    expect(intent.meta?.tags?.[0]).toBe('STAKE');
+    expect((intent.meta?.uiHints as any)?.protocol).toBe('lido');
+  });
+
+  test('parseAndResolve returns unsupported error for PROVIDE_LIQUIDITY', async () => {
+    mockLLMResponse({
+      intentType: 'PROVIDE_LIQUIDITY',
+      confidence: 0.9,
+      params: {
+        inputToken: 'ETH',
+        inputAmount: '1',
+        outputToken: 'USDC',
+        minOutputAmount: null,
+        slippageBps: null,
+        deadline: null,
+        targetChain: null,
+        protocol: 'uniswap',
+        extraParams: {},
+      },
+      missingFields: [],
+      clarificationNeeded: false,
+      clarificationQuestion: null,
+      rawIntent: 'add liquidity 1 ETH + USDC to Uniswap',
     });
 
     const resolved = await parser.parseAndResolve(
-      'stake 1 ETH on Lido',
+      'add liquidity 1 ETH + USDC to Uniswap',
       MOCK_SMART_ACCOUNT,
       BASE_CHAIN_ID
     );

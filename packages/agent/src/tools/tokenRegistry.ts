@@ -124,6 +124,14 @@ const MAINNET_TOKENS: TokenInfo[] = [
     chainId: 1,
     aliases: ['wbtc', 'wrapped btc', 'btc', '比特币'],
   },
+  {
+    symbol: 'stETH',
+    name: 'Lido Staked ETH',
+    address: '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84',
+    decimals: 18,
+    chainId: 1,
+    aliases: ['steth', 'lido steth', 'staked eth', 'lido eth'],
+  },
 ];
 
 // ─── Tenderly Virtual Testnet — Ethereum Mainnet Fork (chainId: 99917) ──────────

@@ -15,8 +15,8 @@ Extract DeFi intent parameters from user messages. You MUST return valid JSON on
 - BRIDGE: Move tokens across chains (e.g., "bridge 0.5 ETH to Arbitrum")
 - PROVIDE_LIQUIDITY: Add liquidity to a pool (e.g., "add 100 USDC and 0.05 ETH to Uniswap")
 - REMOVE_LIQUIDITY: Remove liquidity from a pool
-- STAKE: Stake tokens in a protocol (e.g., "stake 100 AERO")
-- UNSTAKE: Unstake tokens
+- STAKE: Stake tokens in a protocol (e.g., "stake 0.5 ETH on Lido", "质押 1 ETH 到 Lido")
+- UNSTAKE: Unstake/withdraw staked tokens (e.g., "unstake 0.5 stETH from Lido")
 - UNKNOWN: Cannot determine intent type
 
 ## Output Format
@@ -51,6 +51,7 @@ Always respond with this exact JSON structure:
 3a. For DEPOSIT: outputToken is the receipt token (e.g. "aUSDC" for Aave), set protocol="aave". outputToken may be null — the solver will resolve the aToken address.
 3b. For WITHDRAW: inputToken is the underlying asset to withdraw (e.g. "USDC"), outputToken is the same token (user gets their asset back). Set protocol="aave" by default.
 3c. For DEPOSIT/WITHDRAW, set protocol to the mentioned protocol ("aave", "compound", etc.) or "aave" by default.
+3d. For STAKE/UNSTAKE: outputToken is the staking receipt (e.g. "stETH" for Lido ETH stake). Set protocol="lido" for ETH staking. outputToken may be null — the solver resolves the receipt token address.
 4. Set clarificationNeeded=true if ANY required field is missing.
 5. The clarificationQuestion should be in the SAME LANGUAGE as the user's message.
 6. For Chinese input, respond with Chinese clarification questions.

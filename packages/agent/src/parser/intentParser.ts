@@ -144,9 +144,10 @@ export class IntentParser {
       return { parseResult, resolveErrors };
     }
 
-    // MVP supports: SWAP, DEPOSIT, WITHDRAW
-    if (parseResult.intentType !== 'SWAP' && parseResult.intentType !== 'DEPOSIT' && parseResult.intentType !== 'WITHDRAW') {
-      resolveErrors.push(`Intent type "${parseResult.intentType}" is not yet supported. Supported: SWAP, DEPOSIT, WITHDRAW (Aave).`);
+    // Supported intent types
+    const SUPPORTED_TYPES = new Set(['SWAP', 'DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE']);
+    if (!SUPPORTED_TYPES.has(parseResult.intentType)) {
+      resolveErrors.push(`Intent type "${parseResult.intentType}" is not yet supported. Supported: SWAP, DEPOSIT, WITHDRAW (Aave), STAKE, UNSTAKE (Lido).`);
       return { parseResult, resolveErrors };
     }
 
@@ -164,19 +165,27 @@ export class IntentParser {
     }
 
     // Resolve output token
-    // DEPOSIT: output is the receipt token (aToken) — placeholder, solver fills real address
+    // DEPOSIT:  output is the receipt token (aToken) — placeholder, solver fills real address
     // WITHDRAW: output is the underlying asset (same as input) — user gets their token back
-    // SWAP: output is the specified target token
+    // STAKE:    output is the staking receipt token (e.g. stETH) — solver fills real address
+    // UNSTAKE:  output is the underlying asset (ETH for Lido)
+    // SWAP:     output is the specified target token
     const isDeposit  = parseResult.intentType === 'DEPOSIT';
     const isWithdraw = parseResult.intentType === 'WITHDRAW';
-    let outputTokenAddress = '0x0000000000000000000000000000000000000000'; // filled by solver
-    let outputTokenSymbol  = isDeposit ? `a${inputTokenInfo.symbol}` : '';
+    const isStake    = parseResult.intentType === 'STAKE';
+    const isUnstake  = parseResult.intentType === 'UNSTAKE';
+    const isSkill    = isDeposit || isWithdraw || isStake || isUnstake;
 
-    if (isWithdraw) {
-      // For WITHDRAW the user receives the underlying asset back (same token as input)
+    let outputTokenAddress = '0x0000000000000000000000000000000000000000'; // filled by solver
+    let outputTokenSymbol  = isDeposit ? `a${inputTokenInfo.symbol}`
+                           : isStake   ? `st${inputTokenInfo.symbol}`
+                           : '';
+
+    if (isWithdraw || isUnstake) {
+      // For WITHDRAW/UNSTAKE the user receives the underlying asset back
       outputTokenAddress = inputTokenInfo.address;
       outputTokenSymbol  = inputTokenInfo.symbol;
-    } else if (!isDeposit) {
+    } else if (!isSkill) {
       if (!params.outputToken) {
         resolveErrors.push('Output token is required');
         return { parseResult, resolveErrors };
@@ -189,7 +198,7 @@ export class IntentParser {
       outputTokenAddress = outputTokenInfo.address;
       outputTokenSymbol  = outputTokenInfo.symbol;
     } else if (params.outputToken) {
-      // DEPOSIT: user may specify the protocol token (e.g. "aUSDC") — try to resolve
+      // DEPOSIT/STAKE: user may specify the receipt token (e.g. "aUSDC", "stETH") — try to resolve
       const outputTokenInfo = resolveToken(params.outputToken, chain);
       if (outputTokenInfo) {
         outputTokenAddress = outputTokenInfo.address;
@@ -224,10 +233,10 @@ export class IntentParser {
     // Compute slippage
     const slippageBps = params.slippageBps ?? 50;
 
-    // Compute minimum output — DEPOSIT/WITHDRAW are 1:1 so min = input amount; SWAP uses user's spec
+    // Compute minimum output — DEPOSIT/WITHDRAW/STAKE/UNSTAKE are 1:1 so min = input amount
     let minOutputRaw = '0';
-    if (isDeposit || isWithdraw) {
-      minOutputRaw = rawInputAmount;   // expect at least the same amount back (1:1 for lending)
+    if (isSkill) {
+      minOutputRaw = rawInputAmount;   // expect at least the same amount back (1:1 for lending/staking)
     } else if (params.minOutputAmount) {
       try {
         minOutputRaw = parseAmount(params.minOutputAmount, inputTokenInfo.decimals);
@@ -255,7 +264,7 @@ export class IntentParser {
         },
       ],
       constraints: {
-        slippageBps: (isDeposit || isWithdraw) ? 0 : slippageBps,  // lending is 1:1, no slippage
+        slippageBps: isSkill ? 0 : slippageBps,  // lending/staking is 1:1, no slippage
       },
       priorityFee: { token: 'HIEF', amount: '0' },
       policyRef: { policyVersion: 'v0.1' },
@@ -271,7 +280,7 @@ export class IntentParser {
           inputTokenSymbol: inputTokenInfo.symbol,
           outputTokenSymbol,
           inputAmountHuman: params.inputAmount,
-          protocol: params.protocol ?? (isDeposit || isWithdraw ? 'aave' : 'auto'),
+          protocol: params.protocol ?? (isStake || isUnstake ? 'lido' : isDeposit || isWithdraw ? 'aave' : 'auto'),
         },
       },
     };

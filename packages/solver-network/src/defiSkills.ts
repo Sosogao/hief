@@ -322,10 +322,151 @@ export class AaveV3Adapter implements DefiProtocolAdapter {
   }
 }
 
+// ─── Lido Adapter ─────────────────────────────────────────────────────────────
+//
+// Lido stETH staking on Ethereum mainnet only.
+//
+// STAKE:   ETH → stETH  via Lido.submit(referral) payable
+// UNSTAKE: stETH → ETH  via WithdrawalQueue.requestWithdrawals (ERC-4626-style)
+//          Note: UNSTAKE queues a withdrawal request (not instant). Claim after ~1-4 days.
+//
+// Contracts (Ethereum mainnet):
+//   Lido (stETH proxy):    0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84
+//   WithdrawalQueueERC721: 0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1
+
+const LIDO_STETH        = '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84';
+const LIDO_WITHDRAWAL_Q = '0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1';
+
+const LIDO_ABI = [
+  'function submit(address _referral) external payable returns (uint256)',
+  'function getPooledEthByShares(uint256 _sharesAmount) view returns (uint256)',
+  // stETH as ERC-20 (for UNSTAKE approve)
+  'function approve(address spender, uint256 amount) returns (bool)',
+];
+
+const LIDO_WITHDRAWAL_ABI = [
+  'function requestWithdrawals(uint256[] calldata _amounts, address _owner) external returns (uint256[] memory requestIds)',
+];
+
+/** Fetch Lido current staking APR via Lido API */
+async function _fetchLidoApr(): Promise<number> {
+  try {
+    const res = await fetch('https://eth-api.lido.fi/v1/protocol/steth/apr/last', {
+      signal: AbortSignal.timeout(4000),
+    });
+    const json = await res.json() as { data?: { apr?: number } };
+    return json?.data?.apr ?? 3.5;
+  } catch {
+    return 3.5; // fallback APR
+  }
+}
+
+export class LidoAdapter implements DefiProtocolAdapter {
+  readonly id = 'lido';
+  readonly name = 'Lido';
+  readonly description = 'Lido liquid staking — stake ETH to receive stETH and earn staking rewards.';
+  readonly supportedChains = [1, 31337]; // Ethereum mainnet + local fork
+  readonly supportedSkills: DefiSkillType[] = ['STAKE', 'UNSTAKE'];
+
+  supportsToken(token: string, skill: DefiSkillType): boolean {
+    const key = token.toLowerCase();
+    if (skill === 'STAKE') {
+      // Accept ETH (native or sentinel address)
+      return key === ETH_ALIAS.toLowerCase() || key === '0x0000000000000000000000000000000000000000';
+    }
+    if (skill === 'UNSTAKE') {
+      // Accept stETH
+      return key === LIDO_STETH.toLowerCase();
+    }
+    return false;
+  }
+
+  async quote(params: QuoteParams): Promise<DefiSkillQuote | null> {
+    if (params.skill === 'STAKE')   return this._quoteStake(params);
+    if (params.skill === 'UNSTAKE') return this._quoteUnstake(params);
+    return null;
+  }
+
+  private async _quoteStake({ tokenIn, amountIn, recipient }: QuoteParams): Promise<DefiSkillQuote | null> {
+    try {
+      const isEth = tokenIn.toLowerCase() === ETH_ALIAS.toLowerCase()
+                 || tokenIn === '0x0000000000000000000000000000000000000000';
+      if (!isEth) return null;
+
+      const apr = await _fetchLidoApr();
+
+      const iface = new ethers.Interface(LIDO_ABI);
+      // referral = zero address (no referral)
+      const calldata = iface.encodeFunctionData('submit', [ethers.ZeroAddress]);
+
+      return {
+        protocol: this.name, adapterId: this.id, skill: 'STAKE',
+        tokenIn: ETH_ALIAS,
+        tokenOut: LIDO_STETH, tokenOutSymbol: 'stETH',
+        amountIn, amountOut: amountIn, // 1 ETH → ~1 stETH (rebasing token, 1:1 at mint)
+        apy: apr,
+        contractTo: LIDO_STETH,       // submit is on the stETH proxy contract
+        calldata, value: amountIn,    // ETH sent as msg.value
+        needsApproval: false,         // ETH STAKE needs no approve
+        approveTarget: '',
+        route: `Lido Stake ETH → stETH (${apr.toFixed(2)}% APR)`,
+        priceImpactBps: 0,
+      };
+    } catch (e) {
+      console.warn('[Lido] stake quote error:', (e as Error).message?.slice(0, 120));
+      return null;
+    }
+  }
+
+  private async _quoteUnstake({ tokenIn, amountIn, recipient }: QuoteParams): Promise<DefiSkillQuote | null> {
+    try {
+      const isStEth = tokenIn.toLowerCase() === LIDO_STETH.toLowerCase();
+      if (!isStEth) return null;
+
+      // WithdrawalQueue.requestWithdrawals([amount], owner)
+      const iface = new ethers.Interface(LIDO_WITHDRAWAL_ABI);
+      const calldata = iface.encodeFunctionData('requestWithdrawals', [[amountIn], recipient]);
+
+      return {
+        protocol: this.name, adapterId: this.id, skill: 'UNSTAKE',
+        tokenIn: LIDO_STETH,
+        tokenOut: ETH_ALIAS, tokenOutSymbol: 'ETH',
+        amountIn, amountOut: amountIn,
+        apy: 0,
+        contractTo: LIDO_WITHDRAWAL_Q,
+        calldata, value: 0n,
+        needsApproval: true,          // WithdrawalQueue calls stETH.transferFrom
+        approveTarget: LIDO_WITHDRAWAL_Q,
+        receiptTokenIn: LIDO_STETH,   // stETH is burned / transferred
+        route: 'Lido Unstake stETH → ETH (withdrawal queue, ~1-4 days)',
+        priceImpactBps: 0,
+      };
+    } catch (e) {
+      console.warn('[Lido] unstake quote error:', (e as Error).message?.slice(0, 120));
+      return null;
+    }
+  }
+
+  buildCalls(quote: DefiSkillQuote): CallData[] {
+    const calls: CallData[] = [];
+    if (quote.needsApproval) {
+      const iface = new ethers.Interface(['function approve(address,uint256) returns (bool)']);
+      calls.push({
+        to: quote.receiptTokenIn ?? quote.tokenIn,
+        value: 0n,
+        data: iface.encodeFunctionData('approve', [quote.approveTarget, quote.amountIn]),
+      });
+    }
+    calls.push({ to: quote.contractTo, value: quote.value, data: quote.calldata });
+    return calls;
+  }
+}
+
 // ─── Register built-in adapters ───────────────────────────────────────────────
 // External adapters can be registered by importing defiRegistry and calling register().
 
 defiRegistry.register(new AaveV3Adapter());
+defiRegistry.register(new LidoAdapter());
 
 // ─── Legacy exports (backward compatibility) ──────────────────────────────────
 

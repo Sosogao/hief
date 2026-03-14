@@ -9,6 +9,7 @@ import { ethers } from 'ethers';
 import {
   DefiSkillRegistry,
   AaveV3Adapter,
+  LidoAdapter,
   defiRegistry,
   ETH_ALIAS,
   WETH_ADDR,
@@ -351,6 +352,161 @@ describe('AaveV3Adapter.quote', () => {
   });
 });
 
+// ─── LidoAdapter ─────────────────────────────────────────────────────────────
+
+const LIDO_STETH        = '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84';
+const LIDO_WITHDRAWAL_Q = '0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1';
+
+describe('LidoAdapter.supportsToken', () => {
+  let adapter: LidoAdapter;
+  beforeEach(() => { adapter = new LidoAdapter(); });
+
+  test('STAKE: accepts ETH alias', () => {
+    expect(adapter.supportsToken(ETH_ALIAS, 'STAKE')).toBe(true);
+  });
+
+  test('STAKE: accepts zero address (native ETH)', () => {
+    expect(adapter.supportsToken('0x0000000000000000000000000000000000000000', 'STAKE')).toBe(true);
+  });
+
+  test('STAKE: rejects non-ETH tokens', () => {
+    expect(adapter.supportsToken(USDC_ADDR, 'STAKE')).toBe(false);
+    expect(adapter.supportsToken(WETH_ADDR, 'STAKE')).toBe(false);
+  });
+
+  test('UNSTAKE: accepts stETH', () => {
+    expect(adapter.supportsToken(LIDO_STETH, 'UNSTAKE')).toBe(true);
+  });
+
+  test('UNSTAKE: rejects ETH / other tokens', () => {
+    expect(adapter.supportsToken(ETH_ALIAS, 'UNSTAKE')).toBe(false);
+    expect(adapter.supportsToken(USDC_ADDR, 'UNSTAKE')).toBe(false);
+  });
+
+  test('DEPOSIT/WITHDRAW: not supported by Lido', () => {
+    expect(adapter.supportsToken(ETH_ALIAS, 'DEPOSIT')).toBe(false);
+    expect(adapter.supportsToken(LIDO_STETH, 'WITHDRAW')).toBe(false);
+  });
+});
+
+describe('LidoAdapter.quote', () => {
+  let adapter: LidoAdapter;
+
+  beforeEach(() => {
+    adapter = new LidoAdapter();
+    // Mock the module-level _fetchLidoApr by mocking global fetch
+    global.fetch = jest.fn().mockResolvedValue({
+      json: async () => ({ data: { apr: 3.8 } }),
+    }) as any;
+  });
+
+  afterEach(() => { jest.restoreAllMocks(); });
+
+  const stakeParams = (overrides: Partial<QuoteParams> = {}): QuoteParams => ({
+    skill: 'STAKE',
+    tokenIn: ETH_ALIAS,
+    amountIn: ethers.parseEther('1'),
+    recipient: RECIPIENT,
+    rpcUrl: MOCK_RPC,
+    chainId: 1,
+    ...overrides,
+  });
+
+  test('STAKE ETH: sends to stETH contract with value, no approval', async () => {
+    const amount = ethers.parseEther('1');
+    const q = await adapter.quote(stakeParams({ amountIn: amount }));
+    expect(q).not.toBeNull();
+    expect(q!.skill).toBe('STAKE');
+    expect(q!.adapterId).toBe('lido');
+    expect(q!.tokenIn).toBe(ETH_ALIAS);
+    expect(q!.tokenOut.toLowerCase()).toBe(LIDO_STETH.toLowerCase());
+    expect(q!.tokenOutSymbol).toBe('stETH');
+    expect(q!.amountIn).toBe(amount);
+    expect(q!.amountOut).toBe(amount);     // 1:1 at mint
+    expect(q!.apy).toBe(3.8);             // from mocked fetch
+    expect(q!.contractTo.toLowerCase()).toBe(LIDO_STETH.toLowerCase());
+    expect(q!.value).toBe(amount);         // ETH sent as msg.value
+    expect(q!.needsApproval).toBe(false);
+    expect(q!.priceImpactBps).toBe(0);
+  });
+
+  test('STAKE: calldata encodes submit(zeroAddress)', async () => {
+    const q = await adapter.quote(stakeParams());
+    expect(q).not.toBeNull();
+    const iface = new ethers.Interface(['function submit(address _referral) external payable returns (uint256)']);
+    const decoded = iface.decodeFunctionData('submit', q!.calldata);
+    expect(decoded[0]).toBe(ethers.ZeroAddress);
+  });
+
+  test('STAKE: returns null for non-ETH token', async () => {
+    const q = await adapter.quote(stakeParams({ tokenIn: USDC_ADDR }));
+    expect(q).toBeNull();
+  });
+
+  test('UNSTAKE stETH: approve + requestWithdrawals', async () => {
+    const amount = ethers.parseEther('0.5');
+    const q = await adapter.quote(stakeParams({ skill: 'UNSTAKE', tokenIn: LIDO_STETH, amountIn: amount }));
+    expect(q).not.toBeNull();
+    expect(q!.skill).toBe('UNSTAKE');
+    expect(q!.tokenIn.toLowerCase()).toBe(LIDO_STETH.toLowerCase());
+    expect(q!.tokenOut).toBe(ETH_ALIAS);
+    expect(q!.tokenOutSymbol).toBe('ETH');
+    expect(q!.contractTo.toLowerCase()).toBe(LIDO_WITHDRAWAL_Q.toLowerCase());
+    expect(q!.value).toBe(0n);
+    expect(q!.needsApproval).toBe(true);
+    expect(q!.approveTarget.toLowerCase()).toBe(LIDO_WITHDRAWAL_Q.toLowerCase());
+    expect(q!.receiptTokenIn?.toLowerCase()).toBe(LIDO_STETH.toLowerCase());
+    expect(q!.apy).toBe(0); // withdrawal has no yield
+  });
+
+  test('DEPOSIT/WITHDRAW returns null for Lido', async () => {
+    expect(await adapter.quote(stakeParams({ skill: 'DEPOSIT' }))).toBeNull();
+    expect(await adapter.quote(stakeParams({ skill: 'WITHDRAW', tokenIn: LIDO_STETH }))).toBeNull();
+  });
+});
+
+describe('LidoAdapter.buildCalls', () => {
+  let adapter: LidoAdapter;
+  beforeEach(() => { adapter = new LidoAdapter(); });
+
+  test('STAKE: single call with ETH value', () => {
+    const amount = ethers.parseEther('1');
+    const quote: DefiSkillQuote = {
+      protocol: 'Lido', adapterId: 'lido', skill: 'STAKE',
+      tokenIn: ETH_ALIAS, tokenOut: LIDO_STETH, tokenOutSymbol: 'stETH',
+      amountIn: amount, amountOut: amount, apy: 3.8,
+      contractTo: LIDO_STETH,
+      calldata: new ethers.Interface(['function submit(address) payable returns (uint256)']).encodeFunctionData('submit', [ethers.ZeroAddress]),
+      value: amount, needsApproval: false, approveTarget: '',
+      route: 'Lido Stake ETH → stETH', priceImpactBps: 0,
+    };
+    const calls = adapter.buildCalls(quote);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].to.toLowerCase()).toBe(LIDO_STETH.toLowerCase());
+    expect(calls[0].value).toBe(amount);
+  });
+
+  test('UNSTAKE: approve stETH to WithdrawalQueue + requestWithdrawals', () => {
+    const amount = ethers.parseEther('0.5');
+    const quote: DefiSkillQuote = {
+      protocol: 'Lido', adapterId: 'lido', skill: 'UNSTAKE',
+      tokenIn: LIDO_STETH, tokenOut: ETH_ALIAS, tokenOutSymbol: 'ETH',
+      amountIn: amount, amountOut: amount, apy: 0,
+      contractTo: LIDO_WITHDRAWAL_Q,
+      calldata: '0xabcdef',
+      value: 0n, needsApproval: true, approveTarget: LIDO_WITHDRAWAL_Q,
+      receiptTokenIn: LIDO_STETH,
+      route: 'Lido Unstake stETH → ETH', priceImpactBps: 0,
+    };
+    const calls = adapter.buildCalls(quote);
+    expect(calls).toHaveLength(2);
+    // approve: stETH.approve(WithdrawalQueue, amount)
+    expect(calls[0].to.toLowerCase()).toBe(LIDO_STETH.toLowerCase());
+    expect(calls[0].data).toContain('095ea7b3');
+    expect(calls[1].to.toLowerCase()).toBe(LIDO_WITHDRAWAL_Q.toLowerCase());
+  });
+});
+
 // ─── Global registry (sanity check) ─────────────────────────────────────────
 
 describe('Global defiRegistry', () => {
@@ -360,5 +516,23 @@ describe('Global defiRegistry', () => {
     expect(aave!.supportedSkills).toContain('DEPOSIT');
     expect(aave!.supportedSkills).toContain('WITHDRAW');
     expect(aave!.supportedChains).toContain(1);
+  });
+
+  test('has LidoAdapter pre-registered', () => {
+    const lido = defiRegistry.getById('lido');
+    expect(lido).toBeDefined();
+    expect(lido!.supportedSkills).toContain('STAKE');
+    expect(lido!.supportedSkills).toContain('UNSTAKE');
+    expect(lido!.supportedChains).toContain(1);
+  });
+
+  test('getForSkill STAKE returns only Lido (not Aave)', () => {
+    const stakers = defiRegistry.getForSkill('STAKE');
+    expect(stakers.map(a => a.id)).toContain('lido');
+    expect(stakers.map(a => a.id)).not.toContain('aave-v3');
+  });
+
+  test('getForToken ETH/STAKE returns Lido', () => {
+    expect(defiRegistry.getForToken(ETH_ALIAS, 'STAKE').map(a => a.id)).toContain('lido');
   });
 });

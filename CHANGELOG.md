@@ -7,6 +7,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Lido protocol adapter (STAKE / UNSTAKE) (2026-03-14)
+
+**New adapter: `LidoAdapter` in `packages/solver-network/src/defiSkills.ts`**
+
+| Skill | Flow | Contract |
+|---|---|---|
+| STAKE | ETH → stETH via `Lido.submit(referral)` payable | `0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84` |
+| UNSTAKE | stETH → ETH withdrawal request via `WithdrawalQueue.requestWithdrawals` | `0x889edC2eDab5f40e902b864aD4d7AdE8E412F9B1` |
+
+- STAKE: no approval needed — ETH sent as `msg.value`
+- UNSTAKE: approve stETH to WithdrawalQueue first; queues withdrawal NFT (~1-4 day claim delay)
+- APR fetched live from Lido API, fallback 3.5%
+- Auto-registered: `defiRegistry.register(new LidoAdapter())`
+- Supported chains: Ethereum mainnet (1) + local fork (31337)
+
+**Intent parser / agent (`packages/agent/src/`):**
+- `STAKE` and `UNSTAKE` added to supported intent types (alongside SWAP/DEPOSIT/WITHDRAW)
+- `stETH` added to mainnet token registry
+- System prompt updated: STAKE/UNSTAKE description + rule 3d
+- `parseAndResolve`: STAKE/UNSTAKE follow same 1:1 semantics (slippageBps=0, minOutput=inputAmount, protocol=lido)
+
+**Explorer UI:** added `stake 0.5 ETH on Lido` quick suggestion button
+
+**Test count: 86 passing (policy 12 + agent 28 + solver-network 46)**
+
+---
+
 ### Added — solver-network DeFi skill unit tests (2026-03-14)
 
 New test file: `packages/solver-network/src/__tests__/defiSkills.test.ts` (30 tests)
