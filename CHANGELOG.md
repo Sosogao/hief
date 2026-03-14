@@ -7,6 +7,102 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — DeFi Protocol Plugin System + Aave v3 DEPOSIT/WITHDRAW (2026-03-14)
+
+#### Plugin Architecture (`packages/solver-network/src/defiSkills.ts`)
+
+New extensible registry replacing the previous hardcoded Aave-specific logic.
+Adding a new DeFi protocol now requires **zero changes to `server.ts`**.
+
+| Export | Description |
+|--------|-------------|
+| `DefiProtocolAdapter` | Interface every protocol adapter must implement |
+| `QuoteParams` | Input to `adapter.quote()` — skill, tokenIn, amountIn, recipient, rpcUrl |
+| `DefiSkillQuote` | Output — calldata, needsApproval, receiptTokenIn, apy, route, etc. |
+| `CallData` | `{ to, value, data }` — one call in a multi-call sequence |
+| `DefiSkillRegistry` | Singleton with `register()`, `getAll()`, `getForSkill()`, `buildCalls()` |
+| `defiRegistry` | Exported singleton — import and call `.register(new MyAdapter())` |
+| `AaveV3Adapter` | Built-in adapter: DEPOSIT + WITHDRAW for Aave v3 on Ethereum mainnet |
+
+**To add a new protocol:**
+```typescript
+// 1. Implement the interface
+class CompoundV3Adapter implements DefiProtocolAdapter { ... }
+// 2. Register — server.ts auto-discovers it
+defiRegistry.register(new CompoundV3Adapter());
+// 3. Done — solver persona auto-generated, routing protocol-agnostic
+```
+
+#### Aave v3 WITHDRAW (`AaveV3Adapter`)
+
+| Field | DEPOSIT | WITHDRAW |
+|-------|---------|---------|
+| Calldata | `Pool.supply(asset, amount, onBehalfOf, 0)` | `Pool.withdraw(asset, amount, to)` |
+| needsApproval | `true` (USDC → Pool) | `false` (Pool burns aTokens from msg.sender) |
+| ETH variant | `WETHGateway.depositETH(...)` | `WETHGateway.withdrawETH(...)` (approval needed) |
+| `receiptTokenIn` | — | aToken address (e.g. aUSDC) — used for simulation funding |
+
+**Simulation & settlement pre-funding:** For WITHDRAW, the caller must hold **aTokens** (not the underlying). Pre-funding now correctly funds `skillQ.receiptTokenIn` instead of `intent.input.token` in all three paths: `simulateSettlement`, `settleOnChain` (DIRECT), and Safe MULTISIG collect-signature.
+
+#### `server.ts` — protocol-agnostic routing
+
+- `SOLVER_PERSONAS` now auto-generated from `defiRegistry.getAll()` — no manual entry needed per protocol
+- `isDepositIntent` → `isDeFiSkillIntent` + `getIntentSkillType` — handles any `DefiSkillType`
+- `generateQuote` DeFi path: dispatches to `adapter.quote({skill, tokenIn, amountIn, ...})` via registry
+- `buildWinnerTxParams`: uses `defiRegistry.buildCalls(skillQ)` (was: `buildAaveDepositCalls`)
+- SWAP path: rejects DeFi adapter solvers via `defiRegistry.getAll().some(a => a.name === solver.protocol)`
+
+#### `intentParser.ts` + `systemPrompt.ts`
+
+- WITHDRAW intent now supported (was: blocked with "not supported" error)
+- Output token for WITHDRAW = input token (user gets their asset back, 1:1)
+- `slippageBps = 0` for WITHDRAW (same as DEPOSIT — lending is 1:1, no slippage)
+- System prompt: added WITHDRAW example + guidance for `outputToken` resolution (3b)
+
+#### Claude Code Skill: `add-defi-protocol`
+
+Location: `.claude/skills/add-defi-protocol/SKILL.md`
+
+A development-time Claude Code slash command. When a developer runs `/add-defi-protocol Compound v3`, Claude:
+1. Reads the `DefiProtocolAdapter` interface and `AaveV3Adapter` as reference
+2. Asks for contract addresses and supported tokens
+3. Generates a complete `<Name>Adapter` TypeScript class
+4. Registers it in `defiRegistry`
+5. Runs TypeScript compile check
+6. Updates Explorer UI quick suggestions
+
+> **Key concept:** The skill generates code; the TypeScript adapter is what actually runs. The skill is a development accelerator, not a runtime component.
+
+#### Explorer UI (`apps/explorer/index.html`)
+
+- Added "withdraw 50 USDC from Aave" to Quick Suggestions
+
+---
+
+### Added — Aave v3 DEPOSIT Integration (2026-03-13)
+
+#### Features
+
+- **Aave v3 DEPOSIT intent** — AI parses "deposit 100 USDC to Aave" → on-chain `Pool.supply()` execution
+- **Two-step approve + supply UI** — approve tx hash shown as "Step 1", supply tx as "Step 2"
+- **Live APY display** — fetched from `Pool.getReserveData().currentLiquidityRate` (RAY → %)
+- **`tenderly_simulateBundle`** — approve + supply simulated atomically on Tenderly fork
+- **`buildWinnerTxParams()` helper** — single source of truth for Safe/UserOp calldata (replaces 4 hardcoded WETH fallbacks)
+- **`ENABLE_TENDERLY_AUTOFUND` guard** — all `tenderly_setErc20Balance` / `tenderly_setBalance` calls gated; safe to deploy on non-fork networks
+- **Recent inputs history** — last 5 inputs saved to `localStorage` key `hief_recent_inputs`, shown as amber chip buttons above Quick Suggestions
+
+#### Files Changed
+
+| File | Change |
+|------|--------|
+| `packages/solver-network/src/defiSkills.ts` | New file — Aave v3 adapter (later refactored to plugin system) |
+| `packages/solver-network/src/server.ts` | Aave routing, simulation bundle, approve tx hash, buildWinnerTxParams, autofund guard |
+| `packages/agent/src/parser/intentParser.ts` | DEPOSIT intent support |
+| `packages/agent/src/prompts/systemPrompt.ts` | DEPOSIT examples and guidance |
+| `apps/explorer/index.html` | Two-step approve/supply UI, recent inputs history, Aave quick suggestion |
+
+---
+
 ### Added
 - **Real DEX solver integration** — solver auction now queries live DEX protocols:
   - **Odos Aggregator** — multi-hop routing across Uniswap, Curve, Balancer, 100+ sources via Odos API (free, no key)
