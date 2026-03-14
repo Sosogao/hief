@@ -1792,13 +1792,13 @@ app.post('/v1/solver-network/config', (req: Request, res: Response) => {
 const TEST_WALLETS = [
   {
     type: 'EOA',
-    label: 'EOA Test Wallet',
-    description: 'Plain externally-owned account. Executes intents via direct on-chain settlement.',
-    address: '0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a',
+    label: 'EOA Wallet',
+    description: 'Plain externally-owned account. Transactions are signed and executed directly from this address.',
+    address: '0x7d73932636FbC0E57448BA175AbCd800C60daE5F',
     executionMode: 'DIRECT',
     icon: '👤',
     color: '#4ade80',
-    note: 'No smart contract. AI signs and broadcasts directly.',
+    note: 'No smart contract. Transactions execute directly from the EOA.',
   },
   {
     type: 'SAFE_MULTISIG',

@@ -158,7 +158,7 @@
       </div>
       <div class="flex gap-2 mt-3">
         <span class="text-xs text-slate-500">Quick lookup:</span>
-        <button onclick="setExample('0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">EOA</button>
+        <button onclick="setExample('0x7d73932636FbC0E57448BA175AbCd800C60daE5F')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">EOA</button>
         <button onclick="setExample('0xbdB26a0a4DCAdcd16b5B3b0F55f0A85D79280aD1')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Safe Multisig</button>
         <button onclick="setExample('0xafde956738f3d610ae93cd4f4d74b029a9d39ebf')" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Safe+4337</button>
       </div>
@@ -168,13 +168,60 @@
     <div class="mb-8">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-sm font-semibold text-slate-300">&#127981; Test Wallets <span class="text-xs text-slate-500 font-normal ml-2">Pre-configured accounts for each execution mode</span></h2>
-        <button onclick="loadTestWallets()" class="text-xs text-slate-500 hover:text-slate-300">&#8635; Refresh</button>
+        <div class="flex items-center gap-2">
+          <button onclick="toggleFaucetPanel()" class="text-xs px-3 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600/40 text-blue-400 border border-blue-600/30 transition-colors">&#128167; Faucet</button>
+          <button onclick="loadTestWallets()" class="text-xs text-slate-500 hover:text-slate-300">&#8635; Refresh</button>
+        </div>
       </div>
       <div id="testWalletsGrid" class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <!-- Skeleton loading state -->
         <div class="wallet-card wallet-card-eoa skeleton" style="height:160px"></div>
         <div class="wallet-card wallet-card-multisig skeleton" style="height:160px"></div>
         <div class="wallet-card wallet-card-safe4337 skeleton" style="height:160px"></div>
+      </div>
+      <!-- Faucet Panel -->
+      <div id="faucetPanel" class="hidden mt-4 p-4 rounded-xl glass border border-blue-600/30">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-sm font-semibold text-slate-200">&#128167; Faucet — Fund Test Account</span>
+          <button onclick="hideFaucetPanel()" class="text-slate-500 hover:text-slate-300 text-xs">&#10005; Close</button>
+        </div>
+        <p class="text-xs text-slate-400 mb-4">Fund any address on the Tenderly fork with test tokens. No auto-funding — transactions require real balances.</p>
+        <div class="mb-3">
+          <label class="text-xs text-slate-400 mb-1 block">Address to fund</label>
+          <div class="flex gap-2">
+            <input id="faucetAddress" type="text" placeholder="0x..." class="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-200 font-mono focus:border-blue-500 outline-none" />
+            <button onclick="faucetUseSelectedWallet()" class="text-xs px-3 py-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-300 whitespace-nowrap">Use selected</button>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 md:grid-cols-3 gap-2 mb-4">
+          <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+            <input type="checkbox" id="faucetEth" checked class="accent-green-400 shrink-0">
+            <span class="text-xs text-slate-300 flex-1">ETH</span>
+            <input id="faucetEthAmt" type="text" value="0.5" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+          </label>
+          <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+            <input type="checkbox" id="faucetUsdc" checked class="accent-blue-400 shrink-0">
+            <span class="text-xs text-slate-300 flex-1">USDC</span>
+            <input id="faucetUsdcAmt" type="text" value="1000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+          </label>
+          <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+            <input type="checkbox" id="faucetWeth" class="accent-cyan-400 shrink-0">
+            <span class="text-xs text-slate-300 flex-1">WETH</span>
+            <input id="faucetWethAmt" type="text" value="1" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+          </label>
+          <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+            <input type="checkbox" id="faucetUsdt" class="accent-green-300 shrink-0">
+            <span class="text-xs text-slate-300 flex-1">USDT</span>
+            <input id="faucetUsdtAmt" type="text" value="1000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+          </label>
+          <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+            <input type="checkbox" id="faucetDai" class="accent-yellow-400 shrink-0">
+            <span class="text-xs text-slate-300 flex-1">DAI</span>
+            <input id="faucetDaiAmt" type="text" value="1000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+          </label>
+        </div>
+        <button onclick="doFaucet()" id="faucetBtn" class="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors">&#128167; Fund Address</button>
+        <div id="faucetStatus" class="text-xs mt-3 text-center hidden"></div>
       </div>
       <div id="testWalletFundStatus" class="text-xs text-center mt-2 text-slate-500 hidden"></div>
       <!-- Create Smart Wallet row -->
@@ -322,7 +369,7 @@
       <div class="glass rounded-2xl p-4 mb-4 flex flex-wrap gap-3 items-center">
         <div class="flex items-center gap-2">
           <span class="text-xs text-slate-500">Wallet:</span>
-          <input id="chatWallet" type="text" value="0xB67FAfFB8eB9a1972E424bcc51B70Fd6f2d25f8a" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white font-mono w-80" placeholder="0x..." oninput="checkSessionWalletMismatch(this.value.trim())" />
+          <input id="chatWallet" type="text" value="0x7d73932636FbC0E57448BA175AbCd800C60daE5F" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white font-mono w-80" placeholder="0x..." oninput="checkSessionWalletMismatch(this.value.trim())" />
         </div>
         <div class="flex items-center gap-2 ml-auto">
           <span class="text-xs text-slate-500">Session:</span>
@@ -1671,9 +1718,7 @@ function renderTestWallets(wallets) {
     if (w.owners && w.owners.length) {
       ownersHtml = '<div style="font-size:10px;color:#64748b;margin-top:4px;">Owners: '+w.owners.map(function(o){return o.slice(0,8)+'...'}).join(', ')+'</div>';
     }
-    var fundBtn = window._autofundEnabled
-      ? '<button onclick="fundTestWallet(event,\''+w.address+'\')" class="btn-fork-fund" style="font-size:10px;padding:3px 8px;margin-top:6px;">&#128176; Fund 1 ETH</button>'
-      : '';
+    var fundBtn = '<button onclick="openFaucetForAddress(event,\''+w.address+'\')" class="btn-fork-fund" style="font-size:10px;padding:3px 8px;margin-top:6px;">&#128167; Faucet</button>';
     return '<div class="wallet-card '+cc+'" style="--wc-color:'+color+'" onclick="selectTestWallet(\''+w.address+'\',\''+w.type+'\')">'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">'
       +'<div style="font-size:22px;">'+w.icon+'</div>'
@@ -1706,31 +1751,80 @@ function selectTestWallet(address, type) {
   lookupAddress();
 }
 
-async function fundTestWallet(e, address) {
+// ─── Faucet ────────────────────────────────────────────────────────────────────
+
+function toggleFaucetPanel() {
+  var panel = document.getElementById('faucetPanel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) {
+    // Pre-fill with currently selected wallet address if available
+    var addr = document.getElementById('chatWallet').value.trim() || document.getElementById('addressInput').value.trim();
+    if (addr && /^0x[0-9a-fA-F]{40}$/.test(addr)) {
+      document.getElementById('faucetAddress').value = addr;
+    }
+  }
+}
+
+function hideFaucetPanel() {
+  document.getElementById('faucetPanel').classList.add('hidden');
+}
+
+function openFaucetForAddress(e, address) {
   e.stopPropagation();
-  var statusEl = document.getElementById('testWalletFundStatus');
-  statusEl.classList.remove('hidden');
-  statusEl.textContent = '⏳ Funding ' + address.slice(0,10) + '...';
-  statusEl.style.color = '#94a3b8';
+  document.getElementById('faucetAddress').value = address;
+  var panel = document.getElementById('faucetPanel');
+  panel.classList.remove('hidden');
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function faucetUseSelectedWallet() {
+  var addr = document.getElementById('chatWallet').value.trim() || document.getElementById('addressInput').value.trim();
+  if (addr) document.getElementById('faucetAddress').value = addr;
+}
+
+async function doFaucet() {
+  var address = document.getElementById('faucetAddress').value.trim();
+  if (!address || !/^0x[0-9a-fA-F]{40}$/.test(address)) {
+    setFaucetStatus('❌ Enter a valid 0x address', '#f87171'); return;
+  }
+  var assets = [];
+  if (document.getElementById('faucetEth').checked)  assets.push({ symbol: 'ETH',  amount: document.getElementById('faucetEthAmt').value  || '0.5'  });
+  if (document.getElementById('faucetUsdc').checked) assets.push({ symbol: 'USDC', amount: document.getElementById('faucetUsdcAmt').value || '1000' });
+  if (document.getElementById('faucetWeth').checked) assets.push({ symbol: 'WETH', amount: document.getElementById('faucetWethAmt').value || '1'    });
+  if (document.getElementById('faucetUsdt').checked) assets.push({ symbol: 'USDT', amount: document.getElementById('faucetUsdtAmt').value || '1000' });
+  if (document.getElementById('faucetDai').checked)  assets.push({ symbol: 'DAI',  amount: document.getElementById('faucetDaiAmt').value  || '1000' });
+  if (!assets.length) { setFaucetStatus('❌ Select at least one token', '#f87171'); return; }
+
+  var btn = document.getElementById('faucetBtn');
+  btn.disabled = true; btn.textContent = '⏳ Funding...';
+  setFaucetStatus('⏳ Sending request...', '#94a3b8');
   try {
-    var res = await fetch(SOLVER_API+'/v1/solver-network/fund-test-wallet', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ address: address, amountEth: 1 })
+    var res = await fetch(SOLVER_API+'/v1/solver-network/faucet', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ address, assets })
     });
     var json = await res.json();
     if (json.success) {
-      statusEl.textContent = '✅ Funded! New balance: ' + parseFloat(json.data.newBalance).toFixed(4) + ' ETH';
-      statusEl.style.color = '#4ade80';
-      setTimeout(function() { loadTestWallets(); statusEl.classList.add('hidden'); }, 2000);
+      var funded = json.data.funded || {};
+      var parts = Object.entries(funded).map(function(kv) { return kv[1] + ' ' + kv[0]; });
+      var errs  = Object.keys(json.data.errors || {});
+      var msg   = '✅ Funded ' + address.slice(0,10) + '...: ' + parts.join(', ');
+      if (errs.length) msg += ' | ⚠️ Failed: ' + errs.join(', ');
+      setFaucetStatus(msg, '#4ade80');
+      setTimeout(loadTestWallets, 1500);
     } else {
-      statusEl.textContent = '❌ ' + (json.error || 'Fund failed');
-      statusEl.style.color = '#f87171';
+      setFaucetStatus('❌ ' + (json.error || 'Faucet failed'), '#f87171');
     }
   } catch(err) {
-    statusEl.textContent = '❌ Network error: ' + err.message;
-    statusEl.style.color = '#f87171';
+    setFaucetStatus('❌ Network error: ' + err.message, '#f87171');
+  } finally {
+    btn.disabled = false; btn.textContent = '💧 Fund Address';
   }
+}
+
+function setFaucetStatus(msg, color) {
+  var el = document.getElementById('faucetStatus');
+  el.textContent = msg; el.style.color = color; el.classList.remove('hidden');
 }
 
 // ─── Create Smart Wallet ───────────────────────────────────────────────────────
