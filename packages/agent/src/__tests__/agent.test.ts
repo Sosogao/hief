@@ -265,6 +265,262 @@ describe('IntentParser', () => {
     expect(resolved.hief).toBeUndefined();
     expect(resolved.resolveErrors[0]).toContain('not yet supported');
   });
+
+  // ─── DEPOSIT tests ────────────────────────────────────────────────────────────
+
+  test('parseAndResolve builds valid HIEFIntent for DEPOSIT (Aave USDC)', async () => {
+    mockLLMResponse({
+      intentType: 'DEPOSIT',
+      confidence: 0.98,
+      params: {
+        inputToken: 'USDC',
+        inputAmount: '100',
+        outputToken: 'aUSDC',
+        minOutputAmount: null,
+        slippageBps: null,
+        deadline: null,
+        targetChain: null,
+        protocol: 'aave',
+        extraParams: {},
+      },
+      missingFields: [],
+      clarificationNeeded: false,
+      clarificationQuestion: null,
+      rawIntent: 'deposit 100 USDC to Aave',
+    });
+
+    const resolved = await parser.parseAndResolve(
+      'deposit 100 USDC to Aave',
+      MOCK_SMART_ACCOUNT,
+      BASE_CHAIN_ID
+    );
+
+    expect(resolved.resolveErrors).toHaveLength(0);
+    expect(resolved.hief).toBeDefined();
+    const intent = resolved.hief!;
+    // Input: USDC on Base
+    expect(intent.input.token).toBe('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913');
+    expect(intent.input.amount).toBe('100000000');
+    // Output: placeholder address (solver fills real aToken), min = input (1:1)
+    expect(intent.outputs[0].token).toBe('0x0000000000000000000000000000000000000000');
+    expect(intent.outputs[0].minAmount).toBe('100000000');
+    // Lending is 1:1, no slippage
+    expect(intent.constraints.slippageBps).toBe(0);
+    // Tags and hints
+    expect(intent.meta?.tags?.[0]).toBe('DEPOSIT');
+    expect((intent.meta?.uiHints as any)?.inputTokenSymbol).toBe('USDC');
+    expect((intent.meta?.uiHints as any)?.outputTokenSymbol).toBe('aUSDC');
+    expect((intent.meta?.uiHints as any)?.protocol).toBe('aave');
+  });
+
+  test('parseAndResolve builds valid HIEFIntent for DEPOSIT (ETH, no output token specified)', async () => {
+    mockLLMResponse({
+      intentType: 'DEPOSIT',
+      confidence: 0.97,
+      params: {
+        inputToken: 'ETH',
+        inputAmount: '0.5',
+        outputToken: null,
+        minOutputAmount: null,
+        slippageBps: null,
+        deadline: null,
+        targetChain: null,
+        protocol: 'aave',
+        extraParams: {},
+      },
+      missingFields: [],
+      clarificationNeeded: false,
+      clarificationQuestion: null,
+      rawIntent: 'deposit 0.5 ETH to Aave',
+    });
+
+    const resolved = await parser.parseAndResolve(
+      'deposit 0.5 ETH to Aave',
+      MOCK_SMART_ACCOUNT,
+      BASE_CHAIN_ID
+    );
+
+    expect(resolved.resolveErrors).toHaveLength(0);
+    const intent = resolved.hief!;
+    expect(intent.input.amount).toBe('500000000000000000');
+    // No outputToken → placeholder address, outputSymbol = aETH
+    expect(intent.outputs[0].token).toBe('0x0000000000000000000000000000000000000000');
+    expect((intent.meta?.uiHints as any)?.outputTokenSymbol).toBe('aETH');
+    expect(intent.constraints.slippageBps).toBe(0);
+  });
+
+  test('parseAndResolve DEPOSIT: Chinese input "存100 USDC 到 Aave"', async () => {
+    mockLLMResponse({
+      intentType: 'DEPOSIT',
+      confidence: 0.96,
+      params: {
+        inputToken: 'USDC',
+        inputAmount: '100',
+        outputToken: null,
+        minOutputAmount: null,
+        slippageBps: null,
+        deadline: null,
+        targetChain: null,
+        protocol: 'aave',
+        extraParams: {},
+      },
+      missingFields: [],
+      clarificationNeeded: false,
+      clarificationQuestion: null,
+      rawIntent: '存100 USDC 到 Aave',
+    });
+
+    const resolved = await parser.parseAndResolve(
+      '存100 USDC 到 Aave',
+      MOCK_SMART_ACCOUNT,
+      BASE_CHAIN_ID
+    );
+
+    expect(resolved.resolveErrors).toHaveLength(0);
+    expect(resolved.hief).toBeDefined();
+    expect(resolved.hief!.meta?.tags?.[0]).toBe('DEPOSIT');
+    expect(resolved.hief!.input.amount).toBe('100000000');
+  });
+
+  // ─── WITHDRAW tests ───────────────────────────────────────────────────────────
+
+  test('parseAndResolve builds valid HIEFIntent for WITHDRAW (Aave USDC)', async () => {
+    mockLLMResponse({
+      intentType: 'WITHDRAW',
+      confidence: 0.97,
+      params: {
+        inputToken: 'USDC',
+        inputAmount: '50',
+        outputToken: null,
+        minOutputAmount: null,
+        slippageBps: null,
+        deadline: null,
+        targetChain: null,
+        protocol: 'aave',
+        extraParams: {},
+      },
+      missingFields: [],
+      clarificationNeeded: false,
+      clarificationQuestion: null,
+      rawIntent: 'withdraw 50 USDC from Aave',
+    });
+
+    const resolved = await parser.parseAndResolve(
+      'withdraw 50 USDC from Aave',
+      MOCK_SMART_ACCOUNT,
+      BASE_CHAIN_ID
+    );
+
+    expect(resolved.resolveErrors).toHaveLength(0);
+    const intent = resolved.hief!;
+    // Input: USDC
+    expect(intent.input.amount).toBe('50000000');
+    // Output: same token as input (underlying returned to user)
+    expect(intent.outputs[0].token).toBe('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913');
+    expect(intent.outputs[0].minAmount).toBe('50000000');
+    // No slippage for lending withdraw
+    expect(intent.constraints.slippageBps).toBe(0);
+    expect(intent.meta?.tags?.[0]).toBe('WITHDRAW');
+    expect((intent.meta?.uiHints as any)?.outputTokenSymbol).toBe('USDC');
+  });
+
+  test('parseAndResolve WITHDRAW: Chinese input "从 Aave 取出 0.1 ETH"', async () => {
+    mockLLMResponse({
+      intentType: 'WITHDRAW',
+      confidence: 0.95,
+      params: {
+        inputToken: 'ETH',
+        inputAmount: '0.1',
+        outputToken: null,
+        minOutputAmount: null,
+        slippageBps: null,
+        deadline: null,
+        targetChain: null,
+        protocol: 'aave',
+        extraParams: {},
+      },
+      missingFields: [],
+      clarificationNeeded: false,
+      clarificationQuestion: null,
+      rawIntent: '从 Aave 取出 0.1 ETH',
+    });
+
+    const resolved = await parser.parseAndResolve(
+      '从 Aave 取出 0.1 ETH',
+      MOCK_SMART_ACCOUNT,
+      BASE_CHAIN_ID
+    );
+
+    expect(resolved.resolveErrors).toHaveLength(0);
+    const intent = resolved.hief!;
+    expect(intent.input.amount).toBe('100000000000000000');
+    // WITHDRAW returns underlying — output = same address as input (ETH)
+    expect(intent.outputs[0].token).not.toBe('0x0000000000000000000000000000000000000000');
+    expect(intent.constraints.slippageBps).toBe(0);
+    expect(intent.meta?.tags?.[0]).toBe('WITHDRAW');
+  });
+
+  test('parseAndResolve DEPOSIT: returns error for unknown token', async () => {
+    mockLLMResponse({
+      intentType: 'DEPOSIT',
+      confidence: 0.9,
+      params: {
+        inputToken: 'SHIB',
+        inputAmount: '1000000',
+        outputToken: null,
+        minOutputAmount: null,
+        slippageBps: null,
+        deadline: null,
+        targetChain: null,
+        protocol: 'aave',
+        extraParams: {},
+      },
+      missingFields: [],
+      clarificationNeeded: false,
+      clarificationQuestion: null,
+      rawIntent: 'deposit 1000000 SHIB to Aave',
+    });
+
+    const resolved = await parser.parseAndResolve(
+      'deposit 1000000 SHIB to Aave',
+      MOCK_SMART_ACCOUNT,
+      BASE_CHAIN_ID
+    );
+
+    expect(resolved.hief).toBeUndefined();
+    expect(resolved.resolveErrors[0]).toContain('Unknown token');
+  });
+
+  test('parseAndResolve returns unsupported error for STAKE', async () => {
+    mockLLMResponse({
+      intentType: 'STAKE',
+      confidence: 0.93,
+      params: {
+        inputToken: 'ETH',
+        inputAmount: '1',
+        outputToken: 'stETH',
+        minOutputAmount: null,
+        slippageBps: null,
+        deadline: null,
+        targetChain: null,
+        protocol: 'lido',
+        extraParams: {},
+      },
+      missingFields: [],
+      clarificationNeeded: false,
+      clarificationQuestion: null,
+      rawIntent: 'stake 1 ETH on Lido',
+    });
+
+    const resolved = await parser.parseAndResolve(
+      'stake 1 ETH on Lido',
+      MOCK_SMART_ACCOUNT,
+      BASE_CHAIN_ID
+    );
+
+    expect(resolved.hief).toBeUndefined();
+    expect(resolved.resolveErrors[0]).toContain('not yet supported');
+  });
 });
 
 // ─── ConversationEngine Tests ──────────────────────────────────────────────────

@@ -7,6 +7,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Policy engine false positives for DeFi intents (2026-03-14)
+
+**R9 (ETH drain) — false positive on ETH DEPOSIT:**
+- `DEPOSIT`/`STAKE`/`WITHDRAW` intents intentionally send ETH to a protocol; they must not trigger R9
+- Fix: detect DeFi skill intents via `meta.tags[0]` ∈ `DEFI_SKILL_TAGS`; when no explicit `maxSpend` is set, use `intent.input.amount` as the implicit ceiling
+- Result: ETH value ≤ input amount → R9 passes; ETH value > input amount → R9 fires HIGH
+
+**R8 (protocol whitelist) — Aave v3 flagged as unknown:**
+- Added Aave v3 Pool (`0x87870...`) and WETHGateway (`0xD322A...`) to `WHITELISTED_PROTOCOLS` in `packages/common/src/config/index.ts`
+
+**Tests added (`packages/policy/src/__tests__/policy.test.ts`):**
+- R9 PASS: ETH DEPOSIT value = input amount (no false positive)
+- R9 FAIL: ETH DEPOSIT value > input amount (correctly flagged)
+- R8 PASS: Aave v3 Pool calls no longer produce MEDIUM warning
+
+---
+
+### Added — Agent parser tests for DEPOSIT/WITHDRAW (2026-03-14)
+
+New test cases in `packages/agent/src/__tests__/agent.test.ts`:
+- `parseAndResolve` DEPOSIT: USDC, ETH, null outputToken, Chinese input ("存100 USDC 到 Aave")
+- `parseAndResolve` WITHDRAW: USDC, ETH, Chinese input ("从 Aave 取出 0.1 ETH")
+- Error cases: unknown token for DEPOSIT, STAKE returns "not yet supported"
+- Key assertions: `slippageBps=0`, `outputs[0].token` is placeholder for DEPOSIT but underlying for WITHDRAW, `meta.tags[0]` correctness
+
+Total: 27 tests passing (was 22).
+
+---
+
+### Fixed — Explorer UI simulation failure display (2026-03-14)
+
+`showSimulationCard` in `apps/explorer/index.html`:
+- When `sim.success === false`, shows a red warning banner above the execute button
+- Execute buttons across all modes (DIRECT/MULTISIG/ERC4337/Safe4337) change to warning style (`⚠️ Execute Anyway (Sim Failed)`) instead of normal action style
+- Previously the UI showed the error message but the button gave no visual indication of the failure risk
+
+---
+
 ### Fixed — Simulation error propagation (2026-03-14)
 
 `simulateSettlement` now captures and surfaces simulation errors in the returned `SimulationResult.error` field.

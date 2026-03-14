@@ -990,6 +990,11 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
     simHtml += '<div class="sim-row"><span class="sim-label">Status</span><span class="sim-value" style="color:#94a3b8">Simulation data unavailable</span></div>';
   }
 
+  var simFailed = sim && !sim.success;
+  if (simFailed) {
+    simHtml += '<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);font-size:11px;color:#fca5a5;">⚠️ Simulation reverted. Proceeding may result in a failed on-chain transaction. Check the error above before continuing.</div>';
+  }
+
   if (isMultisig) {
     // Multisig-specific info
     simHtml += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(124,58,237,0.2);">'
@@ -1003,8 +1008,13 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
     }
     simHtml += '</div>';
     simHtml += '<div style="margin-top:10px;font-size:11px;color:#94a3b8;">AI will propose the Safe TX. Co-signers must approve before execution.</div>';
-    simHtml += '<button class="btn-multisig" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', true)">';
-    simHtml += '🔐 Propose Multisig Transaction';
+    if (simFailed) {
+      simHtml += '<button class="btn-multisig" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', true)" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4);color:#fca5a5;">';
+      simHtml += '⚠️ Propose Anyway (Sim Failed)';
+    } else {
+      simHtml += '<button class="btn-multisig" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', true)">';
+      simHtml += '🔐 Propose Multisig Transaction';
+    }
     simHtml += '</button>';
   } else if (isSafe4337) {
     // Safe+Safe4337Module-specific info
@@ -1021,8 +1031,13 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
     }
     simHtml += '</div>';
     simHtml += '<div style="margin-top:10px;font-size:11px;color:#94a3b8;">AI builds the UserOperation. You sign with MetaMask, then it executes via EntryPoint → Safe4337Module → Safe.</div>';
-    simHtml += '<button class="btn-safe4337" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false, false, true)">';
-    simHtml += '🛡 Prepare UserOp & Sign with MetaMask';
+    if (simFailed) {
+      simHtml += '<button class="btn-safe4337" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false, false, true)" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4);color:#fca5a5;">';
+      simHtml += '⚠️ Prepare UserOp Anyway (Sim Failed)';
+    } else {
+      simHtml += '<button class="btn-safe4337" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false, false, true)">';
+      simHtml += '🛡 Prepare UserOp & Sign with MetaMask';
+    }
     simHtml += '</button>';
   } else if (isERC4337) {
     // ERC-4337-specific info (SimpleAccount / generic AA)
@@ -1033,13 +1048,23 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
     }
     simHtml += '</div>';
     simHtml += '<div style="margin-top:10px;font-size:11px;color:#94a3b8;">UserOperation will be built, signed, and submitted via EntryPoint. No separate approval needed.</div>';
-    simHtml += '<button class="btn-erc4337" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false, true)">';
-    simHtml += '🤖 Execute via ERC-4337 UserOp';
+    if (simFailed) {
+      simHtml += '<button class="btn-erc4337" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false, true)" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4);color:#fca5a5;">';
+      simHtml += '⚠️ Execute Anyway (Sim Failed)';
+    } else {
+      simHtml += '<button class="btn-erc4337" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false, true)">';
+      simHtml += '🤖 Execute via ERC-4337 UserOp';
+    }
     simHtml += '</button>';
   } else {
     simHtml += '<div style="margin-top:12px;font-size:11px;color:#94a3b8;">This is a dry-run simulation. No transaction has been broadcast yet.</div>';
-    simHtml += '<button class="btn-execute" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false)">';
-    simHtml += '⚡ Confirm & Execute On-Chain';
+    if (simFailed) {
+      simHtml += '<button class="btn-execute" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false)" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4);color:#fca5a5;">';
+      simHtml += '⚠️ Execute Anyway (Sim Failed)';
+    } else {
+      simHtml += '<button class="btn-execute" id="btnExecute-'+intentId+'" onclick="executeSettlement(\''+intentId+'\', false)">';
+      simHtml += '⚡ Confirm & Execute On-Chain';
+    }
     simHtml += '</button>';
   }
   simHtml += '</div>';

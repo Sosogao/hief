@@ -199,9 +199,22 @@ const R8_protocolWhitelist: RuleFn = (_intent, solution) => {
   };
 };
 
+/** DeFi skill intents (DEPOSIT, STAKE, etc.) intentionally send ETH to a protocol.
+ *  Detect via meta.tags[0] to apply a relaxed R9 check. */
+const DEFI_SKILL_TAGS = new Set([
+  'DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE', 'PROVIDE_LIQUIDITY', 'REMOVE_LIQUIDITY',
+]);
+
 // ─── R9: No ETH Value Drain ────────────────────────────────────────────────
 const R9_noEthDrain: RuleFn = (intent, solution) => {
-  const maxSpend = BigInt(intent.constraints.maxSpend ?? '0');
+  const tags = intent.meta?.tags as string[] | undefined;
+  const isDeFiSkill = Array.isArray(tags) && DEFI_SKILL_TAGS.has(tags[0]);
+
+  // For DeFi skill intents without an explicit maxSpend, use the input amount as the
+  // implicit ceiling — the user is knowingly sending that token/ETH to the protocol.
+  const implicitMax = isDeFiSkill ? intent.input.amount : '0';
+  const maxSpend = BigInt(intent.constraints.maxSpend ?? implicitMax);
+
   let totalValue = 0n;
   for (const call of solution.executionPlan.calls) {
     totalValue += BigInt(call.value || '0');

@@ -40,5 +40,8 @@ exports.WHITELISTED_PROTOCOLS = new Set([
     '0x6000da47483062A0D734Ba3dc7576Ce6A0B645C4', // UniswapX Reactor
     '0x2626664c2603336E57B271c5C0b26F421741e481', // Uniswap V3 Router (Base)
     '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+    // Aave v3 (Ethereum mainnet)
+    '0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2', // Aave v3 Pool
+    '0xD322A49006FC828F9B5B37Ab215F99B4E5caB19C', // Aave v3 WrappedTokenGatewayV3 (WETHGateway)
 ]);
 //# sourceMappingURL=index.js.map
