@@ -31,6 +31,17 @@ const USDC_ADDRESS_LOWER = USDC_ADDRESS.toLowerCase();
 const FXUSD_ADDRESS = '0x085780639CC2cACd35E474e71f4d000e2405d8f6';
 const USDC_DECIMALS = 6;
 
+/**
+ * Live mainnet RPC for FxSdk quote calls.
+ *
+ * The FxSdk reads fxSAVE pool state (epoch, rates, slippage) to build calldata.
+ * Tenderly forks can have stale state (e.g. expired epoch in FxUSDBasePool.previewDeposit).
+ * We always quote against live mainnet state — the calldata produced is identical on the fork
+ * because contract addresses and ABIs are the same.
+ */
+const MAINNET_RPC_URL =
+  process.env.MAINNET_RPC_URL ?? 'https://ethereum-rpc.publicnode.com';
+
 // ─── FxProtocolAdapter ────────────────────────────────────────────────────────
 
 export class FxProtocolAdapter implements DefiProtocolAdapter {
@@ -70,11 +81,12 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
   }
 
   private async _quoteDeposit(params: QuoteParams): Promise<DefiSkillQuote | null> {
-    const { tokenIn, amountIn, recipient, rpcUrl } = params;
+    const { tokenIn, amountIn, recipient } = params;
     try {
       if (tokenIn.toLowerCase() !== USDC_ADDRESS_LOWER) return null;
 
-      const sdk = new FxSdk({ rpcUrl, chainId: 1 });
+      // Always use live mainnet RPC for quote building — fork state can be stale (expired epochs).
+      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
 
       const result = await sdk.depositFxSave({
         userAddress: recipient,
@@ -133,12 +145,13 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
   }
 
   private async _quoteWithdraw(params: QuoteParams): Promise<DefiSkillQuote | null> {
-    const { tokenIn, amountIn, recipient, rpcUrl } = params;
+    const { tokenIn, amountIn, recipient } = params;
     try {
       // tokenIn is the underlying USDC amount the user wants back
       if (tokenIn.toLowerCase() !== USDC_ADDRESS_LOWER) return null;
 
-      const sdk = new FxSdk({ rpcUrl, chainId: 1 });
+      // Always use live mainnet RPC for quote building — fork state can be stale.
+      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
 
       // Convert USDC amount to fxSAVE shares via config
       // shares = amountIn * totalSupplyWei / totalAssetsWei
@@ -236,7 +249,8 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
     return calls;
   }
 
-  /** Estimate APY from fxSAVE config ratio; returns 0 on any failure */
+  /** Estimate APY from fxSAVE config ratio; returns 0 on any failure.
+   *  The sdk instance must already be connected to mainnet RPC. */
   private async _fetchApy(sdk: FxSdk): Promise<number> {
     try {
       const config = await sdk.getFxSaveConfig();

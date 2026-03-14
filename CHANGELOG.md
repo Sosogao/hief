@@ -7,6 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — FxSdk uses stale Tenderly fork state, FxUSDBasePool.previewDeposit reverts "expired" (2026-03-15)
+
+**Root cause**: The `FxProtocolAdapter` passed the Tenderly fork RPC URL to `FxSdk`. The fxSAVE pool (`FxUSDBasePool`) has epoch-based reward periods — when the fork is pinned to an old block, the epoch expires and `previewDeposit` reverts with `"expired"`. This caused every fxSAVE quote to silently return `null` → "no valid quotes found".
+
+**Key insight**: `FxSdk` is only used to BUILD calldata (reads slippage, exchange rates, minShares). The generated calldata (contract addresses, ABI-encoded function calls) is the same on both mainnet and the fork. There is no reason to use the fork RPC for quote building — live mainnet state is always more reliable.
+
+**Changes in `packages/solver-network/src/adapters/fxProtocol.ts`:**
+
+- Added `MAINNET_RPC_URL` constant: `process.env.MAINNET_RPC_URL ?? 'https://ethereum-rpc.publicnode.com'`
+- `_quoteDeposit` and `_quoteWithdraw`: replaced `new FxSdk({ rpcUrl, chainId: 1 })` with `new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 })`
+- The `rpcUrl` param from `QuoteParams` (fork URL) is no longer used for calldata building; it remains available for future use if fork-specific reads are needed
+
+**Note on FxSdk singleton**: `FxSdk` uses a module-level singleton client. The first `new FxSdk({ rpcUrl })` call sets the RPC URL for all subsequent instances. Since the server's first FxSdk call now always uses `MAINNET_RPC_URL`, the singleton is always initialized with live mainnet state.
+
+---
+
 ### Fixed — Intent parser misroutes fxSAVE to Aave (2026-03-15)
 
 **Root cause**: Three compounding bugs:
