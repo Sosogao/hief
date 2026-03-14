@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Aave ERC-20 WITHDRAW revert on Tenderly fork (2026-03-14)
+
+**Root cause**: `tenderly_setErc20Balance` silently fails for aTokens (scaled balance storage), leaving
+the settlement wallet with 0 aUSDC. `Pool.withdraw` then reverts with empty reason data.
+
+**Changes in `packages/solver-network/src/server.ts`:**
+
+- `settleOnChain`: Added a `WITHDRAW` ERC-20 pre-supply step — funds wallet with underlying (e.g. USDC),
+  approves it to Aave Pool, calls `Pool.supply()` to acquire real aTokens on the fork, then proceeds
+  with the existing `Pool.withdraw()` calldata which now succeeds.
+- `simulateSettlement`: Fixed pre-funding to use underlying token (not aToken) for all WITHDRAW cases.
+  Added a 3-tx bundle path for ERC-20 WITHDRAW simulation: `approve(underlying) → supply → withdraw`.
+  Previously the single-tx path sent `Pool.withdraw` without aToken balance, causing every WITHDRAW
+  simulation to fail before user even confirmed.
+
+---
+
 ### Added — Lido protocol adapter (STAKE / UNSTAKE) (2026-03-14)
 
 **New adapter: `LidoAdapter` in `packages/solver-network/src/defiSkills.ts`**

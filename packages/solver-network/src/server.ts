@@ -475,10 +475,8 @@ async function simulateSettlement(
     try {
       const simProvider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
       if (skillQ && amountIn > 0n) {
-        // WITHDRAW burns the receipt token (aToken), not the underlying asset
-        const fundToken = skillQ.skill === 'WITHDRAW' && skillQ.receiptTokenIn
-          ? skillQ.receiptTokenIn
-          : intent?.input?.token;
+        // Always fund with underlying — aToken scaled-balance can't be set via tenderly_setErc20Balance
+        const fundToken = intent?.input?.token;
         if (fundToken) {
           await simProvider.send('tenderly_setErc20Balance', [fundToken, simFrom, '0x' + (amountIn * 2n).toString(16)]);
         }
@@ -496,10 +494,12 @@ async function simulateSettlement(
   let simError: string | undefined;
 
   try {
+    const approveIface = new ethers.Interface(['function approve(address spender, uint256 amount) returns (bool)']);
+    const supplyIface  = new ethers.Interface(['function supply(address,uint256,address,uint16)']);
+
     if (skillQ?.needsApproval) {
       // ── Aave ERC-20 deposit: approve + supply must be simulated as a bundle ──
       // tenderly_simulateBundle executes txs in sequence on the same forked state
-      const approveIface = new ethers.Interface(['function approve(address spender, uint256 amount) returns (bool)']);
       const approveData  = approveIface.encodeFunctionData('approve', [skillQ.approveTarget, skillQ.amountIn]);
       const bundlePayload = {
         jsonrpc: '2.0', method: 'tenderly_simulateBundle',
@@ -527,6 +527,42 @@ async function simulateSettlement(
           simError = failed?.error?.message
             || failed?.revert_reason
             || 'Transaction reverted — Safe may lack token balance or approval';
+        }
+      }
+    } else if (skillQ?.skill === 'WITHDRAW' && skillQ.value === 0n) {
+      // ── Aave ERC-20 WITHDRAW: pre-supply to get aTokens, then withdraw ──
+      // aToken scaled-balance can't be spoofed via state override; supply first on the fork.
+      const underlyingToken = inputToken;
+      const approveData = approveIface.encodeFunctionData('approve', [skillQ.contractTo, skillQ.amountIn * 2n]);
+      const supplyData  = supplyIface.encodeFunctionData('supply', [underlyingToken, skillQ.amountIn, simFrom, 0]);
+      const bundlePayload = {
+        jsonrpc: '2.0', method: 'tenderly_simulateBundle',
+        params: [[
+          { from: simFrom, to: underlyingToken,    data: approveData,    value: '0x0', gas: '0x15F90' },
+          { from: simFrom, to: skillQ.contractTo,  data: supplyData,     value: '0x0', gas: '0x5B8D8' },
+          { from: simFrom, to: skillQ.contractTo,  data: skillQ.calldata,value: '0x0', gas: '0x5B8D8' },
+        ], 'latest'],
+        id: 1,
+      };
+      const bundleRes  = await fetch(TENDERLY_RPC_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bundlePayload), signal: AbortSignal.timeout(8000),
+      });
+      const bundleJson = await bundleRes.json() as any;
+      if (bundleJson.error) {
+        simSuccess = false;
+        simError = bundleJson.error?.message || String(bundleJson.error);
+      } else if (Array.isArray(bundleJson.result)) {
+        const results = bundleJson.result as any[];
+        // Only count the withdraw tx gas (last step), not the setup steps
+        gasUsed = parseInt(results[results.length - 1]?.gasUsed || '0', 16) || 250_000;
+        simulatedBlock = parseInt(results[results.length - 1]?.blockNumber || '0x0', 16);
+        simSuccess = results.every((r: any) => r.status === true);
+        if (!simSuccess) {
+          const failed = results.find((r: any) => r.status !== true);
+          simError = failed?.error?.message
+            || failed?.revert_reason
+            || 'Transaction reverted — could not complete WITHDRAW simulation';
         }
       }
     } else {
@@ -617,13 +653,36 @@ async function settleOnChain(
     if (isEthIn) {
       const needed = skillQ.value + ethers.parseEther('0.05');
       await provider.send('tenderly_setBalance', [[wallet.address], '0x' + needed.toString(16)]);
-    } else {
-      // WITHDRAW burns the receipt token (aToken), not the underlying asset
-      const fundToken = skillQ.skill === 'WITHDRAW' && skillQ.receiptTokenIn
-        ? skillQ.receiptTokenIn
-        : tokenIn;
+    } else if (skillQ.skill === 'WITHDRAW' && skillQ.value === 0n) {
+      // ERC-20 WITHDRAW: aToken scaled-balance can't be set via tenderly_setErc20Balance.
+      // Pre-fund by: set underlying balance → approve underlying → supply → wallet gets real aTokens.
       try {
-        await provider.send('tenderly_setErc20Balance', [fundToken, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
+        await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
+      } catch {
+        console.warn('[Settlement] tenderly_setErc20Balance unavailable for underlying');
+      }
+      const ethBal = await provider.getBalance(wallet.address);
+      if (ethBal < ethers.parseEther('0.05')) {
+        await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers.parseEther('0.1').toString(16)]);
+      }
+      // approve underlying to the protocol pool (skillQ.contractTo = Aave Pool for ERC-20 WITHDRAW)
+      const erc20 = new ethers.Contract(tokenIn, ['function approve(address,uint256) returns (bool)'], wallet);
+      const approveForSupply = await erc20.approve(skillQ.contractTo, amountIn * 2n);
+      await approveForSupply.wait();
+      // supply underlying to acquire real aTokens on the fork
+      const supplyIface = new ethers.Interface(['function supply(address,uint256,address,uint16)']);
+      const preSupplyTx = await wallet.sendTransaction({
+        to: skillQ.contractTo,
+        data: supplyIface.encodeFunctionData('supply', [tokenIn, amountIn, wallet.address, 0]),
+        value: 0n,
+        gasLimit: 400_000n,
+      });
+      await preSupplyTx.wait();
+      console.log(`[Settlement] ✅ Pre-supply complete — wallet now holds aTokens for WITHDRAW`);
+    } else {
+      // Standard ERC-20 (DEPOSIT or ETH-WITHDRAW prefund)
+      try {
+        await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
       } catch {
         console.warn('[Settlement] tenderly_setErc20Balance unavailable, proceeding without prefunding');
       }
