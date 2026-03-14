@@ -352,12 +352,17 @@
           </div>
         </div>
       </div>
+      <!-- Recent Inputs -->
+      <div id="recentInputsRow" class="flex flex-wrap gap-2 mb-2 hidden">
+        <span class="text-xs text-slate-500 self-center">Recent:</span>
+        <div id="recentInputsList" class="flex flex-wrap gap-2"></div>
+      </div>
       <!-- Quick Suggestions -->
       <div class="flex flex-wrap gap-2 mb-3" id="chatSuggestions">
         <span class="text-xs text-slate-500 self-center">Try:</span>
         <button onclick="setChatInput('swap 100 USDC to ETH')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">swap 100 USDC to ETH</button>
         <button onclick="setChatInput('swap 0.05 ETH to USDC')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">swap 0.05 ETH to USDC</button>
-        <button onclick="setChatInput('what is my reputation score?')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">what is my reputation score?</button>
+        <button onclick="setChatInput('deposit 100 USDC to Aave')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">deposit 100 USDC to Aave</button>
         <button onclick="setChatInput('show me my recent intents')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">show recent intents</button>
       </div>
       <!-- Input Area -->
@@ -736,6 +741,33 @@ function setChatInput(text) {
   document.getElementById('chatInput').focus();
 }
 
+// ── Recent inputs (localStorage, max 5) ────────────────────────────────────
+function saveRecentInput(msg) {
+  try {
+    var key = 'hief_recent_inputs';
+    var list = JSON.parse(localStorage.getItem(key) || '[]');
+    list = [msg, ...list.filter(function(m) { return m !== msg; })].slice(0, 5);
+    localStorage.setItem(key, JSON.stringify(list));
+    renderRecentInputs();
+  } catch(e) {}
+}
+
+function renderRecentInputs() {
+  try {
+    var key = 'hief_recent_inputs';
+    var list = JSON.parse(localStorage.getItem(key) || '[]');
+    var row  = document.getElementById('recentInputsRow');
+    var container = document.getElementById('recentInputsList');
+    if (!list.length) { row.classList.add('hidden'); return; }
+    row.classList.remove('hidden');
+    container.innerHTML = list.map(function(m) {
+      var label = m.length > 30 ? m.slice(0, 30) + '…' : m;
+      return '<button onclick="setChatInput(' + JSON.stringify(m) + ')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-amber-400 hover:text-amber-300" title="' + m.replace(/"/g,'&quot;') + '">' + label + '</button>';
+    }).join('');
+  } catch(e) {}
+}
+// ──────────────────────────────────────────────────────────────────────────
+
 async function sendChatMessage() {
   var input = document.getElementById('chatInput');
   var msg = input.value.trim();
@@ -743,6 +775,7 @@ async function sendChatMessage() {
   if (!chatSessionId) { await startChatSession(); if (!chatSessionId) return; }
 
   input.value = '';
+  saveRecentInput(msg);
   appendChatMessage('user', msg);
   setChatLoading(true);
   document.getElementById('chatIntentPreview').classList.add('hidden');
@@ -1782,6 +1815,7 @@ function useCreatedWallet(address) {
 // Initialize config and test wallets on page load
 loadConfig();
 loadTestWallets();
+renderRecentInputs();
 </script>
 </body>
 </html>
