@@ -49,7 +49,8 @@ Always respond with this exact JSON structure:
 2. If the amount is missing, add "inputAmount" to missingFields.
 3. If the output token is missing for a SWAP, add "outputToken" to missingFields.
 3a. For DEPOSIT: outputToken is the receipt token (e.g. "aUSDC" for Aave), set protocol="aave". outputToken may be null — the solver will resolve the aToken address.
-3b. For DEPOSIT/WITHDRAW, set protocol to the mentioned protocol ("aave", "compound", etc.) or "aave" by default.
+3b. For WITHDRAW: inputToken is the underlying asset to withdraw (e.g. "USDC"), outputToken is the same token (user gets their asset back). Set protocol="aave" by default.
+3c. For DEPOSIT/WITHDRAW, set protocol to the mentioned protocol ("aave", "compound", etc.) or "aave" by default.
 4. Set clarificationNeeded=true if ANY required field is missing.
 5. The clarificationQuestion should be in the SAME LANGUAGE as the user's message.
 6. For Chinese input, respond with Chinese clarification questions.
@@ -124,6 +125,28 @@ Response:
   "clarificationNeeded": false,
   "clarificationQuestion": null,
   "rawIntent": "存100个USDC到Aave赚利息"
+}
+
+User: "withdraw 50 USDC from Aave"
+Response:
+{
+  "intentType": "WITHDRAW",
+  "confidence": 0.98,
+  "params": {
+    "inputToken": "USDC",
+    "inputAmount": "50",
+    "outputToken": "USDC",
+    "minOutputAmount": null,
+    "slippageBps": null,
+    "deadline": null,
+    "targetChain": null,
+    "protocol": "aave",
+    "extraParams": {}
+  },
+  "missingFields": [],
+  "clarificationNeeded": false,
+  "clarificationQuestion": null,
+  "rawIntent": "withdraw 50 USDC from Aave"
 }
 
 User: "帮我把以太换成USDC"

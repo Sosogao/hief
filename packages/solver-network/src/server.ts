@@ -25,7 +25,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { detectAccountMode, proposeSafeMultisig, executeWithSignatures, buildSafeTxTypedData, type AccountInfo, type ExecutionMode, type SafeTxData, type SafeProposalResult } from './safeMultisig';
 import { quoteOdos, quoteUniswapV3, encodeMultiSend, encodeApprove, buildSwapCalls, type DexQuote } from './dexQuoters';
-import { quoteAaveDeposit, buildAaveDepositCalls, type DefiSkillQuote } from './defiSkills';
+import { defiRegistry, type DefiSkillQuote, type DefiSkillType } from './defiSkills';
 import { executeERC4337, getOrCreateSimpleAccount, ENTRY_POINT_V06, type ERC4337ExecutionResult } from './erc4337';
 import {
   buildSafe4337UserOperation, computeUserOpHash, buildUserOpTypedData,
@@ -69,7 +69,8 @@ interface SolverPersona {
   specialization: string;  // what this solver is best at
 }
 
-const SOLVER_PERSONAS: SolverPersona[] = [
+// DEX solvers — hardcoded (generic routing protocols)
+const DEX_SOLVER_PERSONAS: SolverPersona[] = [
   {
     id: 'odos-solver-01',
     name: 'Odos Aggregator',
@@ -103,18 +104,23 @@ const SOLVER_PERSONAS: SolverPersona[] = [
     successRate: 1,
     specialization: 'fallback',
   },
-  {
-    id: 'aave-solver-01',
-    name: 'Aave v3',
-    protocol: 'Aave',
-    description: 'Aave v3 lending protocol — earn yield by supplying assets.',
-    wallet: ethers.Wallet.createRandom(),
-    feeRateBps: 0,
-    latencyMs: 0,
-    successRate: 1,
-    specialization: 'deposit',
-  },
 ];
+
+// DeFi protocol solvers — auto-generated from plugin registry
+// To add a new protocol: defiRegistry.register(new MyAdapter()) in defiSkills.ts
+const DEFI_SOLVER_PERSONAS: SolverPersona[] = defiRegistry.getAll().map(adapter => ({
+  id: `${adapter.id}-solver`,
+  name: adapter.name,
+  protocol: adapter.name,   // protocol key matches adapter.name for dispatch in generateQuote
+  description: adapter.description,
+  wallet: ethers.Wallet.createRandom(),
+  feeRateBps: 0,
+  latencyMs: 0,
+  successRate: 1,
+  specialization: 'defi',
+}));
+
+const SOLVER_PERSONAS: SolverPersona[] = [...DEX_SOLVER_PERSONAS, ...DEFI_SOLVER_PERSONAS];
 
 // ─── Token Price Oracle (mock) ─────────────────────────────────────────────────
 const TOKEN_PRICES_USD: Record<string, number> = {
@@ -183,12 +189,18 @@ function extractInputAmount(intent: any): number {
   return raw / 1e18;
 }
 
-/** Return true if the intent is a DeFi skill (DEPOSIT, STAKE, etc.) rather than a SWAP */
-function isDepositIntent(intent: any): boolean {
+/** Extract the DeFi skill type from an intent (DEPOSIT, WITHDRAW, STAKE, etc.) */
+function getIntentSkillType(intent: any): DefiSkillType | null {
   const type = intent.meta?.intentType
     || intent.intentType
     || (intent.meta?.tags?.[0] as string | undefined);
-  return type === 'DEPOSIT';
+  const DEFI_SKILLS: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE', 'PROVIDE_LIQUIDITY'];
+  return DEFI_SKILLS.includes(type) ? (type as DefiSkillType) : null;
+}
+
+/** Return true if the intent is a DeFi skill (not a SWAP) */
+function isDeFiSkillIntent(intent: any): boolean {
+  return getIntentSkillType(intent) !== null;
 }
 
 // ─── Quote Generation ─────────────────────────────────────────────────────────
@@ -237,7 +249,7 @@ function buildWinnerTxParams(winner: SolverQuote, intent: any): { to: string; va
   const swapQ  = skillQ ? undefined : getExecQuote(winner);
 
   if (skillQ) {
-    const calls = buildAaveDepositCalls(skillQ);
+    const calls = defiRegistry.buildCalls(skillQ);
     if (calls.length > 1) {
       const ms = encodeMultiSend(calls);
       return { to: ms.to, value: ms.value, data: ms.data, operation: ms.operation };
@@ -275,35 +287,37 @@ async function generateQuote(
   const recipient = intent.smartAccount || intent.sender || ethers.ZeroAddress;
   const inputPrice  = getTokenPrice(extractInputToken(intent));
 
-  // ── DEPOSIT intent: route to DeFi skill solvers (e.g. Aave) ─────────────────
-  const depositIntent = isDepositIntent(intent);
-  if (depositIntent) {
-    if (solver.protocol !== 'Aave') {
-      // Swap-focused solvers don't handle DEPOSIT — return FAILED
+  // ── DeFi skill intent (DEPOSIT, WITHDRAW, …): route to registered protocol adapters ──
+  const skillType = getIntentSkillType(intent);
+  if (skillType) {
+    // Find adapter whose name matches this solver's protocol key
+    const adapter = defiRegistry.getAll().find(a => a.name === solver.protocol);
+    if (!adapter || !adapter.supportedSkills.includes(skillType)) {
       return {
         solverId: solver.id, solverName: solver.name, protocol: solver.protocol,
         expectedOut: '0', expectedOutUSD: 0, fee: '0', feeUSD: 0, netOutUSD: 0,
         validUntil: 0, latencyMs: Date.now() - t0, priceImpactBps: 0,
-        route: 'N/A', status: 'FAILED', error: 'Not a deposit solver',
+        route: 'N/A', status: 'FAILED', error: `Not a ${skillType} solver`,
+        swapQuote: undefined, defiSkillQuote: undefined,
       };
     }
-    // Aave deposit quote
-    const skill = await quoteAaveDeposit(tokenIn, amountIn, recipient, TENDERLY_RPC_URL);
+    const skill = await adapter.quote({ skill: skillType, tokenIn, amountIn, recipient, rpcUrl: TENDERLY_RPC_URL });
     if (!skill) {
       return {
-        solverId: solver.id, solverName: solver.name, protocol: 'Aave v3',
+        solverId: solver.id, solverName: solver.name, protocol: adapter.name,
         expectedOut: '0', expectedOutUSD: 0, fee: '0', feeUSD: 0, netOutUSD: 0,
         validUntil: 0, latencyMs: Date.now() - t0, priceImpactBps: 0,
-        route: 'N/A', status: 'FAILED', error: 'Token not supported on Aave v3',
+        route: 'N/A', status: 'FAILED', error: `Token not supported by ${adapter.name} for ${skillType}`,
+        swapQuote: undefined, defiSkillQuote: undefined,
       };
     }
-    const inDecimals   = getTokenDecimals(tokenIn);
-    const amountHuman  = Number(amountIn) / 10 ** inDecimals;
-    const expectedUSD  = amountHuman * inputPrice;  // deposits are 1:1
+    const inDecimals  = getTokenDecimals(tokenIn);
+    const amountHuman = Number(amountIn) / 10 ** inDecimals;
+    const expectedUSD = amountHuman * inputPrice;  // 1:1 for lending protocol interactions
     return {
       solverId: solver.id,
       solverName: solver.name,
-      protocol: 'Aave v3',
+      protocol: adapter.name,
       expectedOut: skill.amountOut.toString(),
       expectedOutUSD: expectedUSD,
       fee: '0', feeUSD: 0,
@@ -330,13 +344,14 @@ async function generateQuote(
     } else if (solver.protocol === 'Uniswap V3') {
       dexQuote = await quoteUniswapV3(tokenIn, tokenOut, amountIn, recipient, slippageBps, TENDERLY_RPC_URL);
       execQuote = dexQuote;  // UniV3 is already fork-compatible
-    } else if (solver.protocol === 'Aave') {
-      // Aave doesn't handle swaps
+    } else if (defiRegistry.getAll().some(a => a.name === solver.protocol)) {
+      // DeFi protocol adapters don't handle SWAPs
       return {
         solverId: solver.id, solverName: solver.name, protocol: solver.protocol,
         expectedOut: '0', expectedOutUSD: 0, fee: '0', feeUSD: 0, netOutUSD: 0,
         validUntil: 0, latencyMs: Date.now() - t0, priceImpactBps: 0,
         route: 'N/A', status: 'FAILED', error: 'Not a swap solver',
+        swapQuote: undefined, defiSkillQuote: undefined,
       };
     } else {
       // HIEF Native: try Uniswap V3 first (fork-compatible), then Odos as fallback
@@ -459,8 +474,14 @@ async function simulateSettlement(
   if (ENABLE_TENDERLY_AUTOFUND && overrideSimFrom) {
     try {
       const simProvider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
-      if (skillQ && intent?.input?.token && amountIn > 0n) {
-        await simProvider.send('tenderly_setErc20Balance', [intent.input.token, simFrom, '0x' + (amountIn * 2n).toString(16)]);
+      if (skillQ && amountIn > 0n) {
+        // WITHDRAW burns the receipt token (aToken), not the underlying asset
+        const fundToken = skillQ.skill === 'WITHDRAW' && skillQ.receiptTokenIn
+          ? skillQ.receiptTokenIn
+          : intent?.input?.token;
+        if (fundToken) {
+          await simProvider.send('tenderly_setErc20Balance', [fundToken, simFrom, '0x' + (amountIn * 2n).toString(16)]);
+        }
       }
       const simBal = await simProvider.getBalance(simFrom);
       if (simBal < ethers.parseEther('0.01')) {
@@ -580,8 +601,12 @@ async function settleOnChain(
       const needed = skillQ.value + ethers.parseEther('0.05');
       await provider.send('tenderly_setBalance', [[wallet.address], '0x' + needed.toString(16)]);
     } else {
+      // WITHDRAW burns the receipt token (aToken), not the underlying asset
+      const fundToken = skillQ.skill === 'WITHDRAW' && skillQ.receiptTokenIn
+        ? skillQ.receiptTokenIn
+        : tokenIn;
       try {
-        await provider.send('tenderly_setErc20Balance', [tokenIn, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
+        await provider.send('tenderly_setErc20Balance', [fundToken, wallet.address, '0x' + (amountIn * 2n).toString(16)]);
       } catch {
         console.warn('[Settlement] tenderly_setErc20Balance unavailable, proceeding without prefunding');
       }
@@ -589,9 +614,10 @@ async function settleOnChain(
       if (ethBal < ethers.parseEther('0.01')) {
         await provider.send('tenderly_setBalance', [[wallet.address], '0x' + ethers.parseEther('0.1').toString(16)]);
       }
-      // Approve token spending (e.g. USDC → Aave Pool) — surface hash so UI can show it
+      // Approve token spending (e.g. USDC → Aave Pool, or aWETH → Gateway) — surface hash so UI can show it
       if (skillQ.needsApproval) {
-        const erc20 = new ethers.Contract(tokenIn, ['function approve(address,uint256) returns (bool)'], wallet);
+        const approveToken = skillQ.receiptTokenIn ?? tokenIn;
+        const erc20 = new ethers.Contract(approveToken, ['function approve(address,uint256) returns (bool)'], wallet);
         const approveTxObj = await erc20.approve(skillQ.approveTarget, amountIn);
         const approveReceipt = await approveTxObj.wait();
         approveTxHash = approveTxObj.hash;
@@ -781,7 +807,7 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
       solverId: winnerSolver.wallet.address,
       executionPlan: {
         calls: winner.defiSkillQuote
-          ? buildAaveDepositCalls(winner.defiSkillQuote)
+          ? defiRegistry.buildCalls(winner.defiSkillQuote)
               .map(c => ({ to: c.to, value: c.value.toString(), data: c.data, operation: 'CALL' as const }))
           : getExecQuote(winner)
             ? buildSwapCalls(intent.input?.token || '', BigInt(intent.input?.amount || '0'), getExecQuote(winner)!)
@@ -1610,13 +1636,17 @@ app.post('/v1/solver-network/multisig-collect-signature/:intentId', async (req: 
     if (ENABLE_TENDERLY_AUTOFUND) {
       const safeProvider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
       const safeAddress  = accountInfo!.address;
-      const skillQ       = winner?.defiSkillQuote as DefiSkillQuote | undefined;
+      const skillQ = winner?.defiSkillQuote as DefiSkillQuote | undefined;
       const tokenIn      = intent?.input?.token || '';
       const amountIn     = BigInt(intent?.input?.amount || '0');
-      if (skillQ && tokenIn && amountIn > 0n) {
+      if (skillQ && amountIn > 0n) {
+        // WITHDRAW burns the receipt token (aToken), not the underlying
+        const fundToken = skillQ.skill === 'WITHDRAW' && skillQ.receiptTokenIn
+          ? skillQ.receiptTokenIn
+          : tokenIn;
         try {
-          await safeProvider.send('tenderly_setErc20Balance', [tokenIn, safeAddress, '0x' + (amountIn * 2n).toString(16)]);
-          console.log(`[SafeMultisig] Fork-funded Safe ${safeAddress.slice(0, 10)}... with token ${tokenIn}`);
+          await safeProvider.send('tenderly_setErc20Balance', [fundToken, safeAddress, '0x' + (amountIn * 2n).toString(16)]);
+          console.log(`[SafeMultisig] Fork-funded Safe ${safeAddress.slice(0, 10)}... with token ${fundToken}`);
         } catch {
           console.warn('[SafeMultisig] tenderly_setErc20Balance unavailable');
         }

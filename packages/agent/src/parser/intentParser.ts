@@ -144,9 +144,9 @@ export class IntentParser {
       return { parseResult, resolveErrors };
     }
 
-    // MVP supports: SWAP and DEPOSIT
-    if (parseResult.intentType !== 'SWAP' && parseResult.intentType !== 'DEPOSIT') {
-      resolveErrors.push(`Intent type "${parseResult.intentType}" is not yet supported. Supported: SWAP, DEPOSIT (Aave).`);
+    // MVP supports: SWAP, DEPOSIT, WITHDRAW
+    if (parseResult.intentType !== 'SWAP' && parseResult.intentType !== 'DEPOSIT' && parseResult.intentType !== 'WITHDRAW') {
+      resolveErrors.push(`Intent type "${parseResult.intentType}" is not yet supported. Supported: SWAP, DEPOSIT, WITHDRAW (Aave).`);
       return { parseResult, resolveErrors };
     }
 
@@ -164,13 +164,19 @@ export class IntentParser {
     }
 
     // Resolve output token
-    // For DEPOSIT intents the "output" is the receipt token (aToken).
-    // If not specified, use a placeholder — the solver will fill the real aToken address.
-    const isDeposit = parseResult.intentType === 'DEPOSIT';
+    // DEPOSIT: output is the receipt token (aToken) — placeholder, solver fills real address
+    // WITHDRAW: output is the underlying asset (same as input) — user gets their token back
+    // SWAP: output is the specified target token
+    const isDeposit  = parseResult.intentType === 'DEPOSIT';
+    const isWithdraw = parseResult.intentType === 'WITHDRAW';
     let outputTokenAddress = '0x0000000000000000000000000000000000000000'; // filled by solver
     let outputTokenSymbol  = isDeposit ? `a${inputTokenInfo.symbol}` : '';
 
-    if (!isDeposit) {
+    if (isWithdraw) {
+      // For WITHDRAW the user receives the underlying asset back (same token as input)
+      outputTokenAddress = inputTokenInfo.address;
+      outputTokenSymbol  = inputTokenInfo.symbol;
+    } else if (!isDeposit) {
       if (!params.outputToken) {
         resolveErrors.push('Output token is required');
         return { parseResult, resolveErrors };
@@ -183,7 +189,7 @@ export class IntentParser {
       outputTokenAddress = outputTokenInfo.address;
       outputTokenSymbol  = outputTokenInfo.symbol;
     } else if (params.outputToken) {
-      // User may specify the protocol token (e.g. "aUSDC") — try to resolve
+      // DEPOSIT: user may specify the protocol token (e.g. "aUSDC") — try to resolve
       const outputTokenInfo = resolveToken(params.outputToken, chain);
       if (outputTokenInfo) {
         outputTokenAddress = outputTokenInfo.address;
@@ -218,10 +224,10 @@ export class IntentParser {
     // Compute slippage
     const slippageBps = params.slippageBps ?? 50;
 
-    // Compute minimum output — DEPOSIT is 1:1 so min = input amount; SWAP uses user's spec
+    // Compute minimum output — DEPOSIT/WITHDRAW are 1:1 so min = input amount; SWAP uses user's spec
     let minOutputRaw = '0';
-    if (isDeposit) {
-      minOutputRaw = rawInputAmount;   // expect at least the same amount back as aTokens
+    if (isDeposit || isWithdraw) {
+      minOutputRaw = rawInputAmount;   // expect at least the same amount back (1:1 for lending)
     } else if (params.minOutputAmount) {
       try {
         minOutputRaw = parseAmount(params.minOutputAmount, inputTokenInfo.decimals);
@@ -249,7 +255,7 @@ export class IntentParser {
         },
       ],
       constraints: {
-        slippageBps: isDeposit ? 0 : slippageBps,  // deposits are 1:1, no slippage
+        slippageBps: (isDeposit || isWithdraw) ? 0 : slippageBps,  // lending is 1:1, no slippage
       },
       priorityFee: { token: 'HIEF', amount: '0' },
       policyRef: { policyVersion: 'v0.1' },
@@ -265,7 +271,7 @@ export class IntentParser {
           inputTokenSymbol: inputTokenInfo.symbol,
           outputTokenSymbol,
           inputAmountHuman: params.inputAmount,
-          protocol: params.protocol ?? (isDeposit ? 'aave' : 'auto'),
+          protocol: params.protocol ?? (isDeposit || isWithdraw ? 'aave' : 'auto'),
         },
       },
     };
