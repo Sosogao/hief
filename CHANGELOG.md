@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — f(x) leverage out-of-gas on position open tx (2026-03-15)
+
+**Root cause**: "not enough gas for reentrancy sentry" — f(x) leverage open/close involves multiple nested contract calls (FxUSDBasePool → BalancerV2Vault → wstETH → ...) and requires ~800k–1.2M gas. Previous limits (600k execute, 500k simulate) were insufficient.
+
+**Changes in `packages/solver-network/src/server.ts`:**
+- `simulateSettlement` allCalls bundle: approve tx gas `0x30D40` (200k), position tx gas `0x16E360` (1.5M)
+- `settleOnChain` allCalls: approve tx gas limit `200_000n`, position/close tx gas limit `1_500_000n`
+
+---
+
 ### Fixed — Faucet UI missing wstETH / WBTC / fxUSD checkboxes (2026-03-15)
 
 **Root cause**: server-side `FAUCET_TOKENS` already included protocol tokens (from adapter declarations), but the Faucet panel HTML had hardcoded checkboxes for only ETH/USDC/WETH/USDT/DAI — new tokens were invisible to users.

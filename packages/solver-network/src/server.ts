@@ -499,12 +499,13 @@ async function simulateSettlement(
       const bundlePayload = {
         jsonrpc: '2.0', method: 'tenderly_simulateBundle',
         params: [
-          skillQ.allCalls.map(call => ({
+          skillQ.allCalls.map((call, idx) => ({
             from:  multiSimFrom,
             to:    call.to,
             data:  call.data,
             value: call.value === 0n ? '0x0' : ('0x' + call.value.toString(16)),
-            gas:   '0x7A120',
+            // Approve txs (~50k actual) get 200k; position/close txs get 1.5M
+            gas:   idx === 0 && skillQ.allCalls!.length > 1 ? '0x30D40' : '0x16E360',
           })),
           'latest',
         ],
@@ -727,7 +728,7 @@ async function settleOnChain(
         for (let i = 0; i < skillQ.allCalls.length; i++) {
           const call = skillQ.allCalls[i];
           const isLast = i === skillQ.allCalls.length - 1;
-          const res = await sendRaw(call.to, call.data, call.value, isLast ? 600_000n : 150_000n);
+          const res = await sendRaw(call.to, call.data, call.value, isLast ? 1_500_000n : 200_000n);
           console.log(`[Settlement] ✅ allCalls[${i}/${skillQ.allCalls.length - 1}] tx: ${res.hash} | block: ${res.blockNumber}`);
           if (i === 0 && !isLast) {
             approveTxHash = res.hash; // First tx is typically the ERC-20 approve
