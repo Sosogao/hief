@@ -43,15 +43,21 @@ const WSTETH_LOWER = WSTETH_ADDRESS.toLowerCase();
 const WBTC_LOWER   = WBTC_ADDRESS.toLowerCase();
 
 /**
- * Live mainnet RPC for FxSdk quote calls.
- *
- * The FxSdk reads fxSAVE pool state (epoch, rates, slippage) to build calldata.
- * Tenderly forks can have stale state (e.g. expired epoch in FxUSDBasePool.previewDeposit).
- * We always quote against live mainnet state — the calldata produced is identical on the fork
- * because contract addresses and ABIs are the same.
+ * Live mainnet RPC for FxSdk deposit/withdraw quote calls.
+ * fxSAVE epoch state is read from mainnet to avoid stale-epoch errors on forks.
  */
 const MAINNET_RPC_URL =
   process.env.MAINNET_RPC_URL ?? 'https://ethereum-rpc.publicnode.com';
+
+/**
+ * Choose RPC URL for FxSdk leverage calls.
+ * In FORK mode, use the fork RPC so calldata is built against fork state (prices, liquidity).
+ * Mainnet mode falls back to MAINNET_RPC_URL for best quotes via Velora/Odos/FxRoute.
+ * chainId is always 1 because f(x) contract addresses are identical to mainnet.
+ */
+function leverageSdkRpcUrl(params: QuoteParams): string {
+  return params.routingMode === 'FORK' ? (params.rpcUrl || MAINNET_RPC_URL) : MAINNET_RPC_URL;
+}
 
 /** Token address → f(x) market type */
 const TOKEN_TO_MARKET: Record<string, 'ETH' | 'BTC'> = {
@@ -269,7 +275,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const market = TOKEN_TO_MARKET[key];
       if (!market) return null;
 
-      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      const sdk = new FxSdk({ rpcUrl: leverageSdkRpcUrl(params), chainId: 1 });
       const targets = forkSafeTargets(routingMode);
 
       const result = await sdk.increasePosition({
@@ -350,7 +356,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         return null;
       }
 
-      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      const sdk = new FxSdk({ rpcUrl: leverageSdkRpcUrl(params), chainId: 1 });
       const targets = forkSafeTargets(routingMode);
 
       // Always use fxUSD as inputTokenAddress — f(x) short collateral is fxUSD
@@ -425,7 +431,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const market = TOKEN_TO_MARKET[key];
       if (!market) return null;
 
-      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      const sdk = new FxSdk({ rpcUrl: leverageSdkRpcUrl(params), chainId: 1 });
       const targets = forkSafeTargets(routingMode);
 
       const result = await sdk.reducePosition({
