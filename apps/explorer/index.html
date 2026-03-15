@@ -219,6 +219,21 @@
             <span class="text-xs text-slate-300 flex-1">DAI</span>
             <input id="faucetDaiAmt" type="text" value="1000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
           </label>
+          <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+            <input type="checkbox" id="faucetWsteth" checked class="accent-indigo-400 shrink-0">
+            <span class="text-xs text-slate-300 flex-1">wstETH</span>
+            <input id="faucetWstethAmt" type="text" value="1" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+          </label>
+          <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+            <input type="checkbox" id="faucetWbtc" class="accent-orange-400 shrink-0">
+            <span class="text-xs text-slate-300 flex-1">WBTC</span>
+            <input id="faucetWbtcAmt" type="text" value="0.05" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+          </label>
+          <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
+            <input type="checkbox" id="faucetFxusd" class="accent-purple-400 shrink-0">
+            <span class="text-xs text-slate-300 flex-1">fxUSD</span>
+            <input id="faucetFxusdAmt" type="text" value="1000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+          </label>
         </div>
         <button onclick="doFaucet()" id="faucetBtn" class="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors">&#128167; Fund Address</button>
         <div id="faucetStatus" class="text-xs mt-3 text-center hidden"></div>
@@ -1826,11 +1841,14 @@ async function doFaucet() {
     setFaucetStatus('❌ Enter a valid 0x address', '#f87171'); return;
   }
   var assets = [];
-  if (document.getElementById('faucetEth').checked)  assets.push({ symbol: 'ETH',  amount: document.getElementById('faucetEthAmt').value  || '0.5'  });
-  if (document.getElementById('faucetUsdc').checked) assets.push({ symbol: 'USDC', amount: document.getElementById('faucetUsdcAmt').value || '1000' });
-  if (document.getElementById('faucetWeth').checked) assets.push({ symbol: 'WETH', amount: document.getElementById('faucetWethAmt').value || '1'    });
-  if (document.getElementById('faucetUsdt').checked) assets.push({ symbol: 'USDT', amount: document.getElementById('faucetUsdtAmt').value || '1000' });
-  if (document.getElementById('faucetDai').checked)  assets.push({ symbol: 'DAI',  amount: document.getElementById('faucetDaiAmt').value  || '1000' });
+  if (document.getElementById('faucetEth').checked)    assets.push({ symbol: 'ETH',    amount: document.getElementById('faucetEthAmt').value    || '0.5'  });
+  if (document.getElementById('faucetUsdc').checked)   assets.push({ symbol: 'USDC',   amount: document.getElementById('faucetUsdcAmt').value   || '1000' });
+  if (document.getElementById('faucetWeth').checked)   assets.push({ symbol: 'WETH',   amount: document.getElementById('faucetWethAmt').value   || '1'    });
+  if (document.getElementById('faucetUsdt').checked)   assets.push({ symbol: 'USDT',   amount: document.getElementById('faucetUsdtAmt').value   || '1000' });
+  if (document.getElementById('faucetDai').checked)    assets.push({ symbol: 'DAI',    amount: document.getElementById('faucetDaiAmt').value    || '1000' });
+  if (document.getElementById('faucetWsteth').checked) assets.push({ symbol: 'wstETH', amount: document.getElementById('faucetWstethAmt').value || '1'    });
+  if (document.getElementById('faucetWbtc').checked)   assets.push({ symbol: 'WBTC',   amount: document.getElementById('faucetWbtcAmt').value   || '0.05' });
+  if (document.getElementById('faucetFxusd').checked)  assets.push({ symbol: 'fxUSD',  amount: document.getElementById('faucetFxusdAmt').value  || '1000' });
   if (!assets.length) { setFaucetStatus('❌ Select at least one token', '#f87171'); return; }
 
   var btn = document.getElementById('faucetBtn');

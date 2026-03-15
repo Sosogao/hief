@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Faucet UI missing wstETH / WBTC / fxUSD checkboxes (2026-03-15)
+
+**Root cause**: server-side `FAUCET_TOKENS` already included protocol tokens (from adapter declarations), but the Faucet panel HTML had hardcoded checkboxes for only ETH/USDC/WETH/USDT/DAI — new tokens were invisible to users.
+
+**Changes in `apps/explorer/index.html`:**
+- Added wstETH (checked by default), WBTC, fxUSD checkbox rows to Faucet panel
+- Updated `doFaucet()` to include the three new token symbols in the assets array
+
+---
+
 ### Added — Protocol-declared faucet tokens + HIEFMainnetFork3 default (2026-03-15)
 
 Each DeFi adapter can now declare the tokens it needs funded on test forks via `faucetTokens?: FaucetTokenDef[]`.
