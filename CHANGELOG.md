@@ -7,6 +7,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — f(x) leverage quote: token address case mismatch with SDK (2026-03-15)
+
+**Root cause**: `FxSdk.increasePosition()` / `reducePosition()` validates `inputTokenAddress` / `outputTokenAddress` against an internal lowercase hex `tokens` map using strict equality. Passing checksummed EIP-55 addresses (e.g. `0x7f39C581...`) caused `"Input token address must be eth, stETH, weth, wstETH..."` → quote returned `null` → auction found no valid quotes.
+
+**Changes in `packages/solver-network/src/adapters/fxProtocol.ts`:**
+- `_quoteLeverageLong`: `inputTokenAddress: tokenIn.toLowerCase()`
+- `_quoteLeverageShort`: `inputTokenAddress: tokenIn.toLowerCase()`
+- `_quoteLeverageClose`: `outputTokenAddress: tokenIn.toLowerCase()`
+
+---
+
 ### Fixed — Token registry: add wstETH + stETH for Tenderly fork + mainnet (2026-03-15)
 
 **Root cause**: `resolveToken('wstETH', 99917)` returned `null` — `TENDERLY_TOKENS` (chainId 99917) and `MAINNET_TOKENS` (chainId 1) were missing `wstETH` and `stETH` entries, causing "Unknown token: wstETH on chain 99917" when parsing leverage intents.
