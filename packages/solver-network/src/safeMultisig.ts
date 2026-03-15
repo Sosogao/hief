@@ -432,9 +432,12 @@ export async function executeWithSignatures(params: {
 
   let gasLimit: bigint;
   if (simulatedGasUsed && simulatedGasUsed > 0) {
-    // Use simulation gas + Safe execution overhead (50k) + 30% buffer
-    gasLimit = BigInt(Math.ceil((simulatedGasUsed + 50_000) * 1.3));
-    console.log(`[SafeMultisig] Using simulation gas: ${simulatedGasUsed} + overhead → gasLimit: ${gasLimit}`);
+    // Inner calls are nested: Safe → delegatecall MultiSend → call1 → call2.
+    // Each CALL/DELEGATECALL level loses 1/64 of gas (EIP-150), and a new block
+    // means cold storage slots (SLOAD 2100 vs 100 warm).  Use 2× simulation gas
+    // + 300k overhead to ensure enough headroom for both effects.
+    gasLimit = BigInt(simulatedGasUsed) * 2n + 300_000n;
+    console.log(`[SafeMultisig] Using simulation gas: ${simulatedGasUsed} × 2 + 300k overhead → gasLimit: ${gasLimit}`);
   } else {
     try {
       const estimated = await safeContract.execTransaction.estimateGas(...execArgs);
@@ -452,8 +455,19 @@ export async function executeWithSignatures(params: {
   const tx = await safeContract.execTransaction(...execArgs, { gasLimit });
 
   const receipt = await tx.wait();
-  const txHash = receipt?.hash || tx.hash;
-  const blockNumber = receipt?.blockNumber || 0;
+  if (!receipt || receipt.status === 0) {
+    throw new Error(`Safe execTransaction reverted on-chain (GS013/signature failure). tx: ${tx.hash.slice(0, 18)}...`);
+  }
+
+  // Check for ExecutionFailure event (inner tx failed but outer tx succeeded with safeTxGas != 0)
+  const execFailureTopic = ethers.id('ExecutionFailure(bytes32,uint256)');
+  const failed = receipt.logs?.some((l: { topics: string[] }) => l.topics[0] === execFailureTopic);
+  if (failed) {
+    throw new Error(`Safe inner transaction failed (ExecutionFailure emitted). tx: ${tx.hash.slice(0, 18)}...`);
+  }
+
+  const txHash = receipt.hash;
+  const blockNumber = receipt.blockNumber;
 
   console.log(`[SafeMultisig] ✅ execTransaction confirmed | txHash: ${txHash} | block: ${blockNumber}`);
   return { txHash, blockNumber };
