@@ -452,6 +452,21 @@ export interface SimulationResult {
   balanceChanges: Array<{ token: string; symbol: string; delta: string; deltaUSD: number }>;
   simulatedBlock: number;
   error?: string;
+  /** Per-tx breakdown for multi-tx skills (leverage positions etc.) */
+  txSteps?: Array<{
+    index: number;
+    description: string;
+    status: 'success' | 'reverted';
+    gasUsed: number;
+  }>;
+  /** Leverage position metadata (set for LEVERAGE_LONG/SHORT/CLOSE) */
+  leverageInfo?: {
+    market: string;
+    positionType: string;
+    leverage: number;
+    executionPrice: string;
+    routeType: string;
+  };
 }
 
 async function simulateSettlement(
@@ -488,6 +503,7 @@ async function simulateSettlement(
   let simulatedBlock = 0;
   let simSuccess = true;
   let simError: string | undefined;
+  let txStepResults: SimulationResult['txSteps'];
 
   try {
     const approveIface = new ethers.Interface(['function approve(address spender, uint256 amount) returns (bool)']);
@@ -524,12 +540,19 @@ async function simulateSettlement(
         gasUsed = results.reduce((sum: number, r: any) => sum + parseInt(r.gasUsed || '0', 16), 0) || 250_000;
         simulatedBlock = parseInt(results[results.length - 1]?.blockNumber || '0x0', 16);
         simSuccess = results.every((r: any) => r.status === true);
+        // Build per-tx breakdown using descriptions from allCalls
+        txStepResults = results.map((r: any, idx: number) => ({
+          index: idx,
+          description: skillQ!.allCalls![idx]?.description ?? `Step ${idx + 1}`,
+          status: r.status === true ? 'success' as const : 'reverted' as const,
+          gasUsed: parseInt(r.gasUsed || '0', 16),
+        }));
         if (!simSuccess) {
-          const failed = results.find((r: any) => r.status !== true);
-          const failedIdx = results.indexOf(failed);
-          simError = failed?.error?.message
-            || failed?.revert_reason
-            || `Transaction ${failedIdx + 1}/${results.length} reverted — check token balance and approval`;
+          const failedStep = txStepResults.find(s => s.status === 'reverted');
+          const failedTenderly = results.find((r: any) => r.status !== true);
+          simError = failedTenderly?.error?.message
+            || failedTenderly?.revert_reason
+            || `"${failedStep?.description}" reverted — check token balance and approval`;
         }
       }
     } else if (skillQ?.needsApproval) {
@@ -626,10 +649,16 @@ async function simulateSettlement(
   const gasEstimateUSD = gasUsed * 1e-9 * 2650;
 
   const effectiveOutputToken = skillQ ? skillQ.tokenOut : outputToken;
-  const balanceChanges: SimulationResult['balanceChanges'] = [
-    { token: inputToken,          symbol: inputSymbol,           delta: '-' + amountInHuman,  deltaUSD: -inUSD  },
-    { token: effectiveOutputToken, symbol: effectiveOutputSymbol, delta: '+' + amountOutHuman, deltaUSD: outUSD  },
-  ];
+  const isLeverageSkill = skillQ && ['LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE'].includes(skillQ.skill);
+
+  // For leverage positions tokenIn === tokenOut (collateral stays same denomination).
+  // Show only the collateral deduction; the "output" is a leveraged position, not a token transfer.
+  const balanceChanges: SimulationResult['balanceChanges'] = isLeverageSkill
+    ? [{ token: inputToken, symbol: inputSymbol, delta: '-' + amountInHuman, deltaUSD: -inUSD }]
+    : [
+        { token: inputToken,           symbol: inputSymbol,           delta: '-' + amountInHuman,  deltaUSD: -inUSD },
+        { token: effectiveOutputToken, symbol: effectiveOutputSymbol, delta: '+' + amountOutHuman, deltaUSD: outUSD },
+      ];
 
   console.log(`[Simulation] ✅ ${inputSymbol}→${effectiveOutputSymbol} | in: ${amountInHuman} | out: ${amountOutHuman} | gas: ${gasUsed}`);
 
@@ -645,6 +674,8 @@ async function simulateSettlement(
     balanceChanges,
     simulatedBlock,
     ...(simError && { error: simError }),
+    ...(txStepResults && { txSteps: txStepResults }),
+    ...(skillQ?.leverageInfo && { leverageInfo: skillQ.leverageInfo }),
   };
 }
 

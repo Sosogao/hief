@@ -1040,18 +1040,53 @@ function showSimulationCard(intentId, sim, winner, accountInfo) {
 
   if (sim && sim.success) {
     simHtml += '<div class="sim-row"><span class="sim-label">Simulation Status</span><span class="sim-value green">✅ Success (Dry-Run)</span></div>';
-    simHtml += '<div class="sim-row"><span class="sim-label">Expected Output</span><span class="sim-value green">+'+sim.expectedOutputAmount+' '+sim.expectedOutputToken+' (~$'+sim.expectedOutputUSD.toFixed(2)+')</span></div>';
+    // Leverage positions: show position info instead of generic token output
+    if (sim.leverageInfo) {
+      var li = sim.leverageInfo;
+      var posLabel = li.positionType === 'close' ? 'Close Position' : li.leverage + 'x ' + (li.positionType === 'long' ? 'Long' : 'Short');
+      simHtml += '<div class="sim-row"><span class="sim-label">Position</span><span class="sim-value green">⚡ '+posLabel+' · '+li.market+' market · '+li.routeType+'</span></div>';
+      simHtml += '<div class="sim-row"><span class="sim-label">Execution Price</span><span class="sim-value">'+li.executionPrice+'</span></div>';
+    } else {
+      simHtml += '<div class="sim-row"><span class="sim-label">Expected Output</span><span class="sim-value green">+'+sim.expectedOutputAmount+' '+sim.expectedOutputToken+' (~$'+sim.expectedOutputUSD.toFixed(2)+')</span></div>';
+    }
     if (sim.balanceChanges) {
       sim.balanceChanges.forEach(function(bc) {
         var isNeg = bc.delta.startsWith('-');
         simHtml += '<div class="sim-row"><span class="sim-label">Balance Change ('+bc.symbol+')</span><span class="sim-value '+(isNeg?'red':'green')+'">'+(isNeg?'':'+')+''+bc.delta+' (~$'+Math.abs(bc.deltaUSD).toFixed(2)+')</span></div>';
       });
     }
+    // Per-tx step breakdown (multi-tx skills)
+    if (sim.txSteps && sim.txSteps.length > 1) {
+      simHtml += '<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);">';
+      simHtml += '<div style="font-size:10px;color:#64748b;margin-bottom:4px;">Transaction Steps:</div>';
+      sim.txSteps.forEach(function(step) {
+        var ok = step.status === 'success';
+        simHtml += '<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:2px;">';
+        simHtml += '<span style="color:'+(ok?'#4ade80':'#f87171')+'">'+(ok?'✅':'❌')+'</span>';
+        simHtml += '<span style="color:#cbd5e1;flex:1">'+step.description+'</span>';
+        simHtml += '<span style="color:#64748b;font-size:10px">'+step.gasUsed.toLocaleString()+' gas</span>';
+        simHtml += '</div>';
+      });
+      simHtml += '</div>';
+    }
     simHtml += '<div class="sim-row"><span class="sim-label">Gas Used</span><span class="sim-value">'+sim.gasUsed.toLocaleString()+' gas (~$'+sim.gasEstimateUSD.toFixed(4)+')</span></div>';
     simHtml += '<div class="sim-row"><span class="sim-label">Price Impact</span><span class="sim-value">'+(sim.priceImpactBps/100).toFixed(2)+'%</span></div>';
     simHtml += '<div class="sim-row"><span class="sim-label">Simulated Block</span><span class="sim-value">#'+sim.simulatedBlock+'</span></div>';
   } else if (sim && !sim.success) {
     simHtml += '<div class="sim-row"><span class="sim-label">Status</span><span class="sim-value red">❌ Simulation Failed</span></div>';
+    // Per-tx step breakdown even on failure
+    if (sim.txSteps && sim.txSteps.length > 1) {
+      simHtml += '<div style="margin-top:4px;">';
+      sim.txSteps.forEach(function(step) {
+        var ok = step.status === 'success';
+        simHtml += '<div style="display:flex;align-items:center;gap:6px;font-size:11px;margin-bottom:2px;">';
+        simHtml += '<span style="color:'+(ok?'#4ade80':'#f87171')+'">'+(ok?'✅':'❌')+'</span>';
+        simHtml += '<span style="color:#cbd5e1;flex:1">'+step.description+'</span>';
+        simHtml += '<span style="color:#64748b;font-size:10px">'+step.gasUsed.toLocaleString()+' gas</span>';
+        simHtml += '</div>';
+      });
+      simHtml += '</div>';
+    }
     simHtml += '<div class="sim-row"><span class="sim-label">Error</span><span class="sim-value red">'+(sim.error||'Unknown error')+'</span></div>';
   } else {
     simHtml += '<div class="sim-row"><span class="sim-label">Status</span><span class="sim-value" style="color:#94a3b8">Simulation data unavailable</span></div>';

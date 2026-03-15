@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Per-tx simulation steps + leverage position display (2026-03-15)
+
+**Problems:**
+1. Simulation card showed single aggregate result — no per-tx breakdown for approve + position
+2. Balance change showed `WSTETH -0.5 / wstETH +0.5` (same token, different case) for leverage
+3. `CallData` had no description field so step names were unknown
+
+**Changes:**
+- `packages/solver-network/src/defiSkills.ts`: `CallData` gains optional `description?` field
+- `packages/solver-network/src/adapters/fxProtocol.ts`: all three leverage methods annotate `allCalls[i].description` ("Approve wstETH" / "Open 2x Long wstETH (ETH)" / etc.)
+- `packages/solver-network/src/server.ts`:
+  - `SimulationResult` gains `txSteps?` (per-tx breakdown) and `leverageInfo?`
+  - `simulateSettlement` allCalls branch populates `txSteps` from Tenderly bundle result; uses `CallData.description` for labels
+  - Balance changes for LEVERAGE_LONG/SHORT/CLOSE: only show collateral deduction (no fake `+output` since output is a leveraged position, not a token transfer)
+- `apps/explorer/index.html`: simulation card shows per-tx step list (✅/❌ per step + gasUsed); leverage positions show position metadata instead of generic "Expected Output"
+
+---
+
 ### Refactor — Dynamic gas estimation in sendRaw (2026-03-15)
 
 **Problem**: Gas limits were hardcoded per-call-site. f(x) leverage open/close needs variable gas depending on market state; fixed limits caused "out of gas: not enough gas for reentrancy sentry".

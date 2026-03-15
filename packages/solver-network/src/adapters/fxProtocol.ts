@@ -285,13 +285,15 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const route = result.routes[0];
       if (!route || route.txs.length === 0) return null;
 
-      const allCalls: CallData[] = route.txs.map(tx => ({
+      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
+      const allCalls: CallData[] = route.txs.map((tx, idx) => ({
         to: tx.to,
         value: tx.value ?? 0n,
         data: tx.data as string,
+        description: idx === 0 && route.txs.length > 1
+          ? `Approve ${tokenSymbol}`
+          : `Open ${leverageMultiplier}x Long ${tokenSymbol} (${market})`,
       }));
-
-      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
 
       return {
         protocol: this.name,
@@ -350,13 +352,15 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const route = result.routes[0];
       if (!route || route.txs.length === 0) return null;
 
-      const allCalls: CallData[] = route.txs.map(tx => ({
+      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
+      const allCalls: CallData[] = route.txs.map((tx, idx) => ({
         to: tx.to,
         value: tx.value ?? 0n,
         data: tx.data as string,
+        description: idx === 0 && route.txs.length > 1
+          ? `Approve ${tokenSymbol}`
+          : `Open ${leverageMultiplier}x Short ${tokenSymbol} (${market})`,
       }));
-
-      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
 
       return {
         protocol: this.name,
@@ -415,13 +419,15 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const route = result.routes[0];
       if (!route || route.txs.length === 0) return null;
 
-      const allCalls: CallData[] = route.txs.map(tx => ({
+      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
+      const allCalls: CallData[] = route.txs.map((tx, idx) => ({
         to: tx.to,
         value: tx.value ?? 0n,
         data: tx.data as string,
+        description: idx === 0 && route.txs.length > 1
+          ? `Approve ${tokenSymbol}`
+          : `Close Position ${tokenSymbol} (${market})`,
       }));
-
-      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
 
       return {
         protocol: this.name,

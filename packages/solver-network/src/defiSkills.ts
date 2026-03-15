@@ -73,7 +73,7 @@ export interface QuoteParams {
   market?: string;
 }
 
-export type CallData = { to: string; value: bigint; data: string };
+export type CallData = { to: string; value: bigint; data: string; description?: string };
 
 /** Token entry for protocol-specific faucet funding (test environments only) */
 export interface FaucetTokenDef {
