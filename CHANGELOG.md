@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Multi-tx execution + receipt status check + leverage simulation (2026-03-15)
+
+Three compounding bugs causing leverage positions to silently fail:
+
+**Root cause 1**: `sendRaw` did not check `receipt.status` — a reverted tx was treated as success.
+**Root cause 2**: `settleOnChain` did not handle `allCalls` — only sent the last tx (position open), skipping the preceding ERC-20 approve.
+**Root cause 3**: `simulateSettlement` did not handle `allCalls` — fell through to single-tx simulation of only the position tx, simulating without the approve, causing "Transaction reverted".
+
+**Changes in `packages/solver-network/src/server.ts`:**
+- `sendRaw`: throw `Error("Transaction reverted on-chain...")` if `receipt.status === 0` (both impersonation and wallet modes)
+- `settleOnChain`: added `allCalls` branch — iterates each call sequentially, records approveTxHash for first tx
+- `simulateSettlement`: added `allCalls` branch — uses `tenderly_simulateBundle` with all calls; simulates from `intent.smartAccount` (holds collateral); reports which tx in the bundle failed
+
+---
+
 ### Fixed — f(x) leverage quote: token address case mismatch with SDK (2026-03-15)
 
 **Root cause**: `FxSdk.increasePosition()` / `reducePosition()` validates `inputTokenAddress` / `outputTokenAddress` against an internal lowercase hex `tokens` map using strict equality. Passing checksummed EIP-55 addresses (e.g. `0x7f39C581...`) caused `"Input token address must be eth, stETH, weth, wstETH..."` → quote returned `null` → auction found no valid quotes.

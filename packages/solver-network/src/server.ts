@@ -492,7 +492,46 @@ async function simulateSettlement(
   try {
     const approveIface = new ethers.Interface(['function approve(address spender, uint256 amount) returns (bool)']);
 
-    if (skillQ?.needsApproval) {
+    if (skillQ?.allCalls && skillQ.allCalls.length > 0) {
+      // ── Multi-tx bundle (leverage positions: approve + open/close) ──────────
+      // Simulate from the user's own account (which holds the collateral token).
+      const multiSimFrom = intent?.smartAccount || intent?.sender || simFrom;
+      const bundlePayload = {
+        jsonrpc: '2.0', method: 'tenderly_simulateBundle',
+        params: [
+          skillQ.allCalls.map(call => ({
+            from:  multiSimFrom,
+            to:    call.to,
+            data:  call.data,
+            value: call.value === 0n ? '0x0' : ('0x' + call.value.toString(16)),
+            gas:   '0x7A120',
+          })),
+          'latest',
+        ],
+        id: 1,
+      };
+      const bundleRes  = await fetch(TENDERLY_RPC_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bundlePayload), signal: AbortSignal.timeout(10000),
+      });
+      const bundleJson = await bundleRes.json() as any;
+      if (bundleJson.error) {
+        simSuccess = false;
+        simError = bundleJson.error?.message || String(bundleJson.error);
+      } else if (Array.isArray(bundleJson.result)) {
+        const results = bundleJson.result as any[];
+        gasUsed = results.reduce((sum: number, r: any) => sum + parseInt(r.gasUsed || '0', 16), 0) || 250_000;
+        simulatedBlock = parseInt(results[results.length - 1]?.blockNumber || '0x0', 16);
+        simSuccess = results.every((r: any) => r.status === true);
+        if (!simSuccess) {
+          const failed = results.find((r: any) => r.status !== true);
+          const failedIdx = results.indexOf(failed);
+          simError = failed?.error?.message
+            || failed?.revert_reason
+            || `Transaction ${failedIdx + 1}/${results.length} reverted — check token balance and approval`;
+        }
+      }
+    } else if (skillQ?.needsApproval) {
       // ── Aave ERC-20 deposit: approve + supply must be simulated as a bundle ──
       // tenderly_simulateBundle executes txs in sequence on the same forked state
       const approveData  = approveIface.encodeFunctionData('approve', [skillQ.approveTarget, skillQ.amountIn]);
@@ -653,10 +692,16 @@ async function settleOnChain(
         gas:   '0x' + gasLimit.toString(16),
       }]);
       const receipt = await provider.waitForTransaction(hash);
+      if (receipt && receipt.status === 0) {
+        throw new Error(`Transaction reverted on-chain (tx: ${hash.slice(0, 18)}...)`);
+      }
       return { hash, blockNumber: receipt?.blockNumber ?? 0 };
     } else {
       const tx = await wallet.sendTransaction({ to, data, value, gasLimit });
       const receipt = await tx.wait();
+      if (receipt && receipt.status === 0) {
+        throw new Error(`Transaction reverted on-chain (tx: ${tx.hash.slice(0, 18)}...)`);
+      }
       return { hash: tx.hash, blockNumber: receipt?.blockNumber ?? 0 };
     }
   };
@@ -673,22 +718,40 @@ async function settleOnChain(
 
   try {
     if (skillQ) {
-      // ── DeFi skill execution (Aave DEPOSIT / WITHDRAW / etc.) ──────────────
+      // ── DeFi skill execution (Aave DEPOSIT / WITHDRAW / leverage / etc.) ──
       console.log(`[Settlement] ${skillQ.skill} via ${skillQ.protocol} | from: ${execAddress.slice(0, 10)}... | in: ${amountIn} → ${skillQ.tokenOutSymbol}`);
 
-      // Approve ERC-20 spending if required (e.g. USDC → Aave Pool)
-      if (skillQ.needsApproval && skillQ.value === 0n) {
-        const approveToken = skillQ.receiptTokenIn ?? skillQ.tokenIn ?? tokenIn;
-        const approveData  = approveIface.encodeFunctionData('approve', [skillQ.approveTarget, skillQ.amountIn]);
-        const res = await sendRaw(approveToken, approveData, 0n, 100_000n);
-        approveTxHash = res.hash;
-        console.log(`[Settlement] ✅ Approve tx: ${approveTxHash} | block: ${res.blockNumber}`);
-      }
+      if (skillQ.allCalls && skillQ.allCalls.length > 0) {
+        // Multi-tx execution (e.g. approve + open leverage position).
+        // Execute each call sequentially — EOA must wait for each receipt before sending the next.
+        for (let i = 0; i < skillQ.allCalls.length; i++) {
+          const call = skillQ.allCalls[i];
+          const isLast = i === skillQ.allCalls.length - 1;
+          const res = await sendRaw(call.to, call.data, call.value, isLast ? 600_000n : 150_000n);
+          console.log(`[Settlement] ✅ allCalls[${i}/${skillQ.allCalls.length - 1}] tx: ${res.hash} | block: ${res.blockNumber}`);
+          if (i === 0 && !isLast) {
+            approveTxHash = res.hash; // First tx is typically the ERC-20 approve
+          }
+          if (isLast) {
+            txHash = res.hash;
+            blockNumber = res.blockNumber;
+          }
+        }
+      } else {
+        // Approve ERC-20 spending if required (e.g. USDC → Aave Pool)
+        if (skillQ.needsApproval && skillQ.value === 0n) {
+          const approveToken = skillQ.receiptTokenIn ?? skillQ.tokenIn ?? tokenIn;
+          const approveData  = approveIface.encodeFunctionData('approve', [skillQ.approveTarget, skillQ.amountIn]);
+          const res = await sendRaw(approveToken, approveData, 0n, 100_000n);
+          approveTxHash = res.hash;
+          console.log(`[Settlement] ✅ Approve tx: ${approveTxHash} | block: ${res.blockNumber}`);
+        }
 
-      const res = await sendRaw(skillQ.contractTo, skillQ.calldata, skillQ.value, 400_000n);
-      txHash      = res.hash;
-      blockNumber = res.blockNumber;
-      console.log(`[Settlement] ✅ ${skillQ.skill} tx: ${txHash} | block: ${blockNumber}`);
+        const res = await sendRaw(skillQ.contractTo, skillQ.calldata, skillQ.value, 400_000n);
+        txHash      = res.hash;
+        blockNumber = res.blockNumber;
+        console.log(`[Settlement] ✅ ${skillQ.skill} tx: ${txHash} | block: ${blockNumber}`);
+      }
 
     } else if (swapQ) {
       // ── Real DEX swap ───────────────────────────────────────────────────────
