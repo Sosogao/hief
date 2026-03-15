@@ -1925,6 +1925,7 @@ app.get('/v1/solver-network/skills/:id', (req: Request, res: Response) => {
 
 // GET /v1/solver-network/config — return current runtime configuration
 app.get('/v1/solver-network/config', (_req: Request, res: Response) => {
+  const aiWalletAddress = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY).address;
   res.json({
     success: true,
     data: {
@@ -1937,6 +1938,8 @@ app.get('/v1/solver-network/config', (_req: Request, res: Response) => {
       usdcAddress: USDC_ADDRESS,
       entryPointV07: ENTRY_POINT_V07,
       safe4337Module: SAFE_4337_MODULE_V030,
+      /** AI settlement wallet — co-signer for Multisig, deployer for Safe4337, gas payer */
+      aiWalletAddress,
     },
   });
 });
@@ -2071,6 +2074,17 @@ app.post('/v1/solver-network/create-smart-wallet', async (req: Request, res: Res
     let owners: string[];
     let threshold: number;
     const aiWallet = new ethers.Wallet(SETTLEMENT_PRIVATE_KEY);
+    const provider  = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
+
+    // Fund AI deployer wallet before deployment — it needs ETH to pay Safe Factory gas.
+    // tenderly_setBalance is idempotent; safe to call even if already funded.
+    try {
+      const deployerEth = '0x' + ethers.parseEther('1').toString(16);
+      await provider.send('tenderly_setBalance', [[aiWallet.address], deployerEth]);
+      console.log(`[CreateWallet] Funded AI deployer ${aiWallet.address.slice(0, 10)}... with 1 ETH`);
+    } catch (e: any) {
+      console.warn('[CreateWallet] Could not pre-fund deployer:', e.message?.slice(0, 80));
+    }
 
     if (walletType === 'safe4337') {
       safeAddress = await deployNewSafe4337Account({
@@ -2097,7 +2111,6 @@ app.post('/v1/solver-network/create-smart-wallet', async (req: Request, res: Res
 
     // Auto-fund the new Safe with ETH for gas
     try {
-      const provider = new ethers.JsonRpcProvider(TENDERLY_RPC_URL);
       const hexAmount = '0x' + ethers.parseEther('1').toString(16);
       await provider.send('tenderly_setBalance', [[safeAddress], hexAmount]);
     } catch { /* Non-critical — fork might not support setBalance */ }

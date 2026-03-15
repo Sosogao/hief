@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Smart wallet deploy fails silently + AI wallet not visible (2026-03-15)
+
+**Root causes:**
+1. `create-smart-wallet` used `SETTLEMENT_PRIVATE_KEY` as deployer but never funded it → Safe Factory tx failed with "insufficient funds" and the server returned 500 with no clear message.
+2. AI settlement wallet was not listed anywhere in the UI, making it impossible for the user to fund it.
+3. After creating a smart wallet the user had to manually click "Use this wallet".
+
+**Changes in `packages/solver-network/src/server.ts`:**
+- `create-smart-wallet`: before deploying, call `tenderly_setBalance` on the AI deployer wallet with 1 ETH; reuse the same `provider` instance to fund the new Safe.
+- `GET /v1/solver-network/config`: expose `aiWalletAddress` (settlement wallet public address).
+
+**Changes in `apps/explorer/index.html`:**
+- `loadConfig()`: save `aiWalletAddress` to `window._aiWalletAddress`; re-render wallet grid so AI card appears immediately.
+- `renderTestWallets()`: appends an "AI Settlement Wallet" card (🤖, amber colour) with Faucet button.
+- `createSmartWallet()`: auto-calls `useCreatedWallet(safeAddress)` on success and refreshes wallet list — no manual click needed.
+
+---
+
 ### Added — Per-tx simulation steps + leverage position display (2026-03-15)
 
 **Problems:**

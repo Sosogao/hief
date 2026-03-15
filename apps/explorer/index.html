@@ -1726,6 +1726,9 @@ async function loadConfig() {
     var json = await res.json();
     if (json.success) {
       window._autofundEnabled = json.data.enableTenderlyAutofund;
+      window._aiWalletAddress = json.data.aiWalletAddress || null;
+      // Re-render wallet list now that AI address is known (loadTestWallets may have run first)
+      if (window._aiWalletAddress && window._testWallets) renderTestWallets(window._testWallets);
 
       // If localStorage has a saved fork, push it to server (overrides server default)
       if (savedRpc && savedRpc.startsWith('http')) {
@@ -1758,7 +1761,7 @@ async function loadConfig() {
 }
 
 // ─── Test Wallets ─────────────────────────────────────────────────────────────
-var _testWallets = [];
+window._testWallets = [];
 
 async function loadTestWallets() {
   var grid = document.getElementById('testWalletsGrid');
@@ -1766,8 +1769,8 @@ async function loadTestWallets() {
     var res = await fetch(SOLVER_API+'/v1/solver-network/test-wallets');
     var json = await res.json();
     if (!json.success) return;
-    _testWallets = json.data;
-    renderTestWallets(_testWallets);
+    window._testWallets = json.data;
+    renderTestWallets(window._testWallets);
   } catch(e) {
     grid.innerHTML = '<div class="text-xs text-slate-500 col-span-3 text-center py-4">Failed to load test wallets</div>';
   }
@@ -1782,6 +1785,24 @@ function renderTestWallets(wallets) {
     'SAFE_MULTISIG':'<span class="mode-badge-multisig">&#128272; Multisig</span>',
     'SAFE_4337':    '<span class="mode-badge-safe4337">&#128737; Safe+4337</span>',
   };
+  var aiCard = '';
+  if (window._aiWalletAddress) {
+    var aiAddr = window._aiWalletAddress;
+    var aiShort = aiAddr.slice(0,10)+'...'+aiAddr.slice(-6);
+    aiCard = '<div class="wallet-card wallet-card-eoa" style="--wc-color:#f59e0b;opacity:0.9;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">'
+      +'<div style="font-size:22px;">🤖</div>'
+      +'<span style="font-size:10px;background:rgba(245,158,11,0.15);border:1px solid rgba(245,158,11,0.3);color:#fbbf24;border-radius:4px;padding:2px 6px;">AI Deployer</span>'
+      +'</div>'
+      +'<div style="font-size:13px;font-weight:700;color:#f1f5f9;margin-bottom:2px;">AI Settlement Wallet</div>'
+      +'<div style="font-family:monospace;font-size:10px;color:#64748b;margin-bottom:6px;">'+aiShort+'</div>'
+      +'<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">Co-signer for Multisig. Deployer &amp; gas payer for Safe4337. Must hold ETH on fork.</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">'
+      +'<div style="font-size:11px;color:#64748b;">Fund via Faucet before deploying</div>'
+      +'<button onclick="openFaucetForAddress(event,\''+aiAddr+'\')" class="btn-fork-fund" style="font-size:10px;padding:3px 8px;">&#128167; Faucet</button>'
+      +'</div>'
+      +'</div>';
+  }
   grid.innerHTML = wallets.map(function(w) {
     var cc = cardClasses[w.type] || 'wallet-card-eoa';
     var color = modeColors[w.type] || '#4ade80';
@@ -1821,7 +1842,7 @@ function renderTestWallets(wallets) {
       +fundBtn
       +'</div>'
       +'</div>';
-  }).join('');
+  }).join('') + aiCard;
 }
 
 function selectTestWallet(address, type) {
@@ -2002,8 +2023,10 @@ async function createSmartWallet(walletType) {
     if (json.success) {
       var d = json.data;
       statusEl.style.color = '#4ade80';
-      statusEl.innerHTML = '✅ Created! <span style="font-family:monospace;font-size:11px;">' + d.safeAddress + '</span>'
-        + ' — <button onclick="useCreatedWallet(\'' + d.safeAddress + '\')" style="color:#60a5fa;text-decoration:underline;background:none;border:none;cursor:pointer;">Use this wallet</button>';
+      statusEl.innerHTML = '✅ Created! <span style="font-family:monospace;font-size:11px;">' + d.safeAddress + '</span> — now set as active wallet.';
+      // Auto-switch to the new wallet and refresh test wallet list
+      useCreatedWallet(d.safeAddress);
+      setTimeout(loadTestWallets, 500);
     } else {
       statusEl.textContent = '❌ ' + (json.error || 'Deployment failed');
       statusEl.style.color = '#f87171';
