@@ -499,13 +499,13 @@ async function simulateSettlement(
       const bundlePayload = {
         jsonrpc: '2.0', method: 'tenderly_simulateBundle',
         params: [
-          skillQ.allCalls.map((call, idx) => ({
+          skillQ.allCalls.map(call => ({
             from:  multiSimFrom,
             to:    call.to,
             data:  call.data,
             value: call.value === 0n ? '0x0' : ('0x' + call.value.toString(16)),
-            // Approve txs (~50k actual) get 200k; position/close txs get 1.5M
-            gas:   idx === 0 && skillQ.allCalls!.length > 1 ? '0x30D40' : '0x16E360',
+            // Simulation doesn't cost real gas — give each call generous headroom
+            gas:   '0x1E8480', // 2,000,000
           })),
           'latest',
         ],
@@ -681,9 +681,31 @@ async function settleOnChain(
    * Impersonated accounts use eth_sendTransaction RPC directly (no private key
    * needed). Settlement wallet uses ethers Wallet.sendTransaction.
    */
+  /**
+   * Estimate gas for a tx from execAddress, then send it.
+   *
+   * Gas is estimated dynamically with a 25% buffer so the limit is never
+   * hardcoded. If estimation itself reverts, we surface the error immediately
+   * (fail-fast) rather than sending a tx that will definitely revert on-chain.
+   *
+   * This mirrors how a human wallet operates: MetaMask estimates gas before
+   * showing the confirmation dialog.
+   */
   const sendRaw = async (
-    to: string, data: string, value: bigint, gasLimit = 400_000n,
-  ): Promise<{ hash: string; blockNumber: number }> => {
+    to: string, data: string, value: bigint,
+  ): Promise<{ hash: string; blockNumber: number; gasUsed: number }> => {
+    // ── 1. Estimate gas (fail-fast if tx would revert) ──────────────────────
+    let gasLimit: bigint;
+    try {
+      const estimated = await provider.estimateGas({ from: execAddress, to, data, value });
+      gasLimit = estimated * 125n / 100n; // 25% buffer
+      console.log(`[Settlement] ⛽ estimateGas: ${estimated} → gasLimit: ${gasLimit}`);
+    } catch (estErr: any) {
+      const reason = estErr?.info?.error?.message ?? estErr?.message ?? String(estErr);
+      throw new Error(`Gas estimation failed (tx would revert): ${reason.slice(0, 200)}`);
+    }
+
+    // ── 2. Send & wait for receipt ──────────────────────────────────────────
     if (useImpersonation) {
       const hash = await provider.send('eth_sendTransaction', [{
         from:  execAddress,
@@ -696,14 +718,14 @@ async function settleOnChain(
       if (receipt && receipt.status === 0) {
         throw new Error(`Transaction reverted on-chain (tx: ${hash.slice(0, 18)}...)`);
       }
-      return { hash, blockNumber: receipt?.blockNumber ?? 0 };
+      return { hash, blockNumber: receipt?.blockNumber ?? 0, gasUsed: Number(receipt?.gasUsed ?? 0) };
     } else {
       const tx = await wallet.sendTransaction({ to, data, value, gasLimit });
       const receipt = await tx.wait();
       if (receipt && receipt.status === 0) {
         throw new Error(`Transaction reverted on-chain (tx: ${tx.hash.slice(0, 18)}...)`);
       }
-      return { hash: tx.hash, blockNumber: receipt?.blockNumber ?? 0 };
+      return { hash: tx.hash, blockNumber: receipt?.blockNumber ?? 0, gasUsed: Number(receipt?.gasUsed ?? 0) };
     }
   };
 
@@ -728,8 +750,8 @@ async function settleOnChain(
         for (let i = 0; i < skillQ.allCalls.length; i++) {
           const call = skillQ.allCalls[i];
           const isLast = i === skillQ.allCalls.length - 1;
-          const res = await sendRaw(call.to, call.data, call.value, isLast ? 1_500_000n : 200_000n);
-          console.log(`[Settlement] ✅ allCalls[${i}/${skillQ.allCalls.length - 1}] tx: ${res.hash} | block: ${res.blockNumber}`);
+          const res = await sendRaw(call.to, call.data, call.value);
+          console.log(`[Settlement] ✅ allCalls[${i}/${skillQ.allCalls.length - 1}] tx: ${res.hash} | block: ${res.blockNumber} | gasUsed: ${res.gasUsed}`);
           if (i === 0 && !isLast) {
             approveTxHash = res.hash; // First tx is typically the ERC-20 approve
           }
@@ -743,12 +765,12 @@ async function settleOnChain(
         if (skillQ.needsApproval && skillQ.value === 0n) {
           const approveToken = skillQ.receiptTokenIn ?? skillQ.tokenIn ?? tokenIn;
           const approveData  = approveIface.encodeFunctionData('approve', [skillQ.approveTarget, skillQ.amountIn]);
-          const res = await sendRaw(approveToken, approveData, 0n, 100_000n);
+          const res = await sendRaw(approveToken, approveData, 0n);
           approveTxHash = res.hash;
-          console.log(`[Settlement] ✅ Approve tx: ${approveTxHash} | block: ${res.blockNumber}`);
+          console.log(`[Settlement] ✅ Approve tx: ${approveTxHash} | block: ${res.blockNumber} | gasUsed: ${res.gasUsed}`);
         }
 
-        const res = await sendRaw(skillQ.contractTo, skillQ.calldata, skillQ.value, 400_000n);
+        const res = await sendRaw(skillQ.contractTo, skillQ.calldata, skillQ.value);
         txHash      = res.hash;
         blockNumber = res.blockNumber;
         console.log(`[Settlement] ✅ ${skillQ.skill} tx: ${txHash} | block: ${blockNumber}`);
@@ -761,10 +783,10 @@ async function settleOnChain(
       if (swapQ.swapValue === 0n) {
         // ERC-20 input: approve router first
         const approveData = approveIface.encodeFunctionData('approve', [swapQ.approveTarget, amountIn * 2n]);
-        await sendRaw(tokenIn, approveData, 0n, 100_000n);
+        await sendRaw(tokenIn, approveData, 0n);
       }
 
-      const res = await sendRaw(swapQ.swapTo, swapQ.swapData, swapQ.swapValue, 500_000n);
+      const res = await sendRaw(swapQ.swapTo, swapQ.swapData, swapQ.swapValue);
       txHash      = res.hash;
       blockNumber = res.blockNumber;
       console.log(`[Settlement] ✅ Swap tx: ${txHash} | block: ${blockNumber}`);
@@ -772,7 +794,7 @@ async function settleOnChain(
     } else {
       // ── Fallback: WETH wrap ─────────────────────────────────────────────────
       const wethIface = new ethers.Interface(['function deposit() payable']);
-      const res = await sendRaw(WETH_ADDRESS, wethIface.encodeFunctionData('deposit'), ethers.parseEther('0.001'), 100_000n);
+      const res = await sendRaw(WETH_ADDRESS, wethIface.encodeFunctionData('deposit'), ethers.parseEther('0.001'));
       txHash      = res.hash;
       blockNumber = res.blockNumber;
       console.log(`[Settlement] Fallback WETH wrap: ${txHash}`);

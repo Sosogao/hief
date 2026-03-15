@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Refactor — Dynamic gas estimation in sendRaw (2026-03-15)
+
+**Problem**: Gas limits were hardcoded per-call-site. f(x) leverage open/close needs variable gas depending on market state; fixed limits caused "out of gas: not enough gas for reentrancy sentry".
+
+**Design**: Mirrors how a human wallet (MetaMask) works — call `eth_estimateGas` before sending. After the approve tx confirms, the allowance state is correct so the position tx can be accurately estimated.
+
+- `sendRaw(to, data, value)` — gas parameter removed; always calls `eth_estimateGas` with 25% buffer. If estimation itself reverts, throws immediately with the revert reason (fail-fast, no wasted on-chain tx).
+- All call sites updated: allCalls loop, needsApproval, DEX swap approve, WETH fallback.
+- Simulation `allCalls` bundle: each call gets `0x1E8480` (2M) headroom — simulation costs no real gas.
+
+---
+
 ### Fixed — f(x) leverage out-of-gas on position open tx (2026-03-15)
 
 **Root cause**: "not enough gas for reentrancy sentry" — f(x) leverage open/close involves multiple nested contract calls (FxUSDBasePool → BalancerV2Vault → wstETH → ...) and requires ~800k–1.2M gas. Previous limits (600k execute, 500k simulate) were insufficient.
