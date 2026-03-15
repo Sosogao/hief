@@ -140,6 +140,14 @@ const MAINNET_TOKENS: TokenInfo[] = [
     chainId: 1,
     aliases: ['wsteth', 'wrapped steth', 'wrapped staked eth'],
   },
+  {
+    symbol: 'fxUSD',
+    name: 'f(x) Protocol USD',
+    address: '0x085780639CC2cACd35E474e71f4d000e2405d8f6',
+    decimals: 18,
+    chainId: 1,
+    aliases: ['fxusd', 'fx usd', 'fx stable', 'fxprotocol usd'],
+  },
 ];
 
 // ─── Tenderly Virtual Testnet — Ethereum Mainnet Fork (chainId: 99917) ──────────
@@ -208,6 +216,14 @@ const TENDERLY_TOKENS: TokenInfo[] = [
     decimals: 18,
     chainId: 99917,
     aliases: ['wsteth', 'wrapped steth', 'wrapped staked eth'],
+  },
+  {
+    symbol: 'fxUSD',
+    name: 'f(x) Protocol USD',
+    address: '0x085780639CC2cACd35E474e71f4d000e2405d8f6',
+    decimals: 18,
+    chainId: 99917,
+    aliases: ['fxusd', 'fx usd', 'fx stable', 'fxprotocol usd'],
   },
 ];
 

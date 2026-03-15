@@ -98,9 +98,12 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       if (this.fxSaveAddress && key === this.fxSaveAddress.toLowerCase()) return true;
       return false;
     }
-    if (skill === 'LEVERAGE_LONG' || skill === 'LEVERAGE_SHORT') {
-      // Accept wstETH (ETH market) or WBTC (BTC market)
+    if (skill === 'LEVERAGE_LONG') {
       return key in TOKEN_TO_MARKET;
+    }
+    if (skill === 'LEVERAGE_SHORT') {
+      // SHORT collateral is fxUSD. Also accept wstETH/WBTC as market indicators.
+      return key === FXUSD_ADDRESS.toLowerCase() || key in TOKEN_TO_MARKET;
     }
     if (skill === 'LEVERAGE_CLOSE') {
       return key in TOKEN_TO_MARKET;
@@ -331,18 +334,32 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
     const { tokenIn, amountIn, recipient, routingMode, leverageMultiplier = 2, positionId = 0 } = params;
     try {
       const key = tokenIn.toLowerCase();
-      const market = TOKEN_TO_MARKET[key];
-      if (!market) return null;
+
+      // For SHORT positions, fxUSD is the actual collateral.
+      // tokenIn may be:
+      //   - fxUSD address → user holds fxUSD; market from params.market
+      //   - WBTC / wstETH → used as market indicator; pass fxUSD to SDK (user must have fxUSD)
+      let market: 'ETH' | 'BTC';
+      if (key === FXUSD_ADDRESS.toLowerCase()) {
+        const m = (params.market?.toUpperCase() ?? '') as 'ETH' | 'BTC';
+        if (m !== 'ETH' && m !== 'BTC') return null;
+        market = m;
+      } else if (key in TOKEN_TO_MARKET) {
+        market = TOKEN_TO_MARKET[key]!;
+      } else {
+        return null;
+      }
 
       const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
       const targets = forkSafeTargets(routingMode);
 
+      // Always use fxUSD as inputTokenAddress — f(x) short collateral is fxUSD
       const result = await sdk.increasePosition({
         market,
         type: 'short',
         positionId,
         leverage: leverageMultiplier,
-        inputTokenAddress: tokenIn.toLowerCase() as any,
+        inputTokenAddress: FXUSD_ADDRESS.toLowerCase() as any,
         amount: amountIn,
         slippage: 1,
         userAddress: recipient,
@@ -352,15 +369,22 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const route = result.routes[0];
       if (!route || route.txs.length === 0) return null;
 
-      const tokenSymbol = key === WSTETH_LOWER ? 'wstETH' : 'WBTC';
-      const allCalls: CallData[] = route.txs.map((tx, idx) => ({
-        to: tx.to,
-        value: tx.value ?? 0n,
-        data: tx.data as string,
-        description: idx === 0 && route.txs.length > 1
-          ? `Approve ${tokenSymbol}`
-          : `Open ${leverageMultiplier}x Short ${tokenSymbol} (${market})`,
-      }));
+      const marketToken = market === 'ETH' ? 'wstETH' : 'WBTC';
+      const allCalls: CallData[] = route.txs.map((tx, idx) => {
+        // Detect approve token from the tx recipient (ERC20 approve: to = token address)
+        let desc: string;
+        if (idx === 0 && route.txs.length > 1) {
+          const toAddr = tx.to?.toLowerCase() ?? '';
+          const approveToken = toAddr === FXUSD_ADDRESS.toLowerCase() ? 'fxUSD'
+            : toAddr === WBTC_LOWER ? 'WBTC'
+            : toAddr === WSTETH_LOWER ? 'wstETH'
+            : 'token';
+          desc = `Approve ${approveToken}`;
+        } else {
+          desc = `Open ${leverageMultiplier}x Short ${marketToken} (${market})`;
+        }
+        return { to: tx.to, value: tx.value ?? 0n, data: tx.data as string, description: desc };
+      });
 
       return {
         protocol: this.name,
@@ -368,7 +392,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         skill: 'LEVERAGE_SHORT',
         tokenIn,
         tokenOut: tokenIn,
-        tokenOutSymbol: tokenSymbol,
+        tokenOutSymbol: 'fxUSD',
         amountIn,
         amountOut: amountIn,
         apy: 0,
@@ -385,7 +409,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
           executionPrice: route.executionPrice,
           routeType: route.routeType,
         },
-        route: `f(x) ${leverageMultiplier}x Short ${tokenSymbol} (${market} market, ${route.routeType})`,
+        route: `f(x) ${leverageMultiplier}x Short ${marketToken} (${market} market, ${route.routeType})`,
         priceImpactBps: 0,
       };
     } catch (e) {
