@@ -1809,6 +1809,7 @@ app.post('/v1/solver-network/multisig-collect-signature/:intentId', async (req: 
       signer2: coSignerAddress,
       executorKey: SETTLEMENT_PRIVATE_KEY,
       rpcUrl: TENDERLY_RPC_URL,
+      simulatedGasUsed: pending.simulation?.gasUsed,
     });
 
     // Clean up pending state
