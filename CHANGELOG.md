@@ -7,6 +7,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Token registry: add wstETH + stETH for Tenderly fork + mainnet (2026-03-15)
+
+**Root cause**: `resolveToken('wstETH', 99917)` returned `null` — `TENDERLY_TOKENS` (chainId 99917) and `MAINNET_TOKENS` (chainId 1) were missing `wstETH` and `stETH` entries, causing "Unknown token: wstETH on chain 99917" when parsing leverage intents.
+
+**Changes in `packages/agent/src/tools/tokenRegistry.ts`:**
+- `MAINNET_TOKENS` (chainId 1): added `wstETH` (`0x7f39C581...`)
+- `TENDERLY_TOKENS` (chainId 99917): added `stETH` (`0xae7ab965...`) + `wstETH` (`0x7f39C581...`)
+
+---
+
 ### Added — f(x) Protocol leveraged positions + adaptive routing (2026-03-15)
 
 **New skill types**: `LEVERAGE_LONG`, `LEVERAGE_SHORT`, `LEVERAGE_CLOSE` — open/increase/close leveraged positions on wstETH (ETH market) and WBTC (BTC market) via f(x) Protocol.
