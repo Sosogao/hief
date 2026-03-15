@@ -1994,8 +1994,9 @@ function hideCreateWalletModal() {
 }
 
 async function doCreateWallet() {
+  var walletType = _pendingCreateWalletType; // save before hideCreateWalletModal clears it
   hideCreateWalletModal();
-  if (_pendingCreateWalletType) await createSmartWallet(_pendingCreateWalletType);
+  if (walletType) await createSmartWallet(walletType);
 }
 
 async function createSmartWallet(walletType) {

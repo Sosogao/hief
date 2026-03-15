@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — Deploy button in Create Smart Wallet modal does nothing (2026-03-15)
+
+**Root cause**: `doCreateWallet()` called `hideCreateWalletModal()` first, which sets `_pendingCreateWalletType = null`. The subsequent `if (_pendingCreateWalletType)` check was always false, so `createSmartWallet()` was never invoked — silent no-op.
+
+**Fix in `apps/explorer/index.html`**: save `walletType` into a local variable before calling `hideCreateWalletModal()`.
+
+---
+
 ### Fixed — Smart wallet deploy fails silently + AI wallet not visible (2026-03-15)
 
 **Root causes:**
