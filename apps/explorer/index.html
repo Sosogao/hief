@@ -125,7 +125,7 @@
     <div id="forkConfigStatus" class="text-xs mt-2 text-slate-500"></div>
     <div class="mt-2 flex flex-wrap gap-3">
       <span class="text-xs text-slate-500">Quick presets:</span>
-      <button onclick="setForkPreset('https://virtual.mainnet.eu.rpc.tenderly.co/4a595ca5-c96a-4ad8-aeb6-b789648f9880', 99917)" class="text-xs text-indigo-400 hover:text-indigo-300 underline">HIEFMainnetFork2 (99917)</button>
+      <button onclick="setForkPreset('https://virtual.mainnet.eu.rpc.tenderly.co/fe86cb9a-2308-4d56-be86-ba6de507aca8', 99917)" class="text-xs text-indigo-400 hover:text-indigo-300 underline">HIEFMainnetFork3 (99917)</button>
       <button onclick="setForkPreset('https://virtual.base.rpc.tenderly.co/...', 84532)" class="text-xs text-indigo-400 hover:text-indigo-300 underline">Base Fork (84532)</button>
     </div>
   </div>
@@ -1658,9 +1658,18 @@ async function loadConfig() {
   try {
     // Restore persisted fork config from localStorage (set by saveForkConfig)
     var savedRpc = null, savedChainId = null;
+    var STALE_FORK_URLS = [
+      'https://virtual.mainnet.eu.rpc.tenderly.co/4a595ca5-c96a-4ad8-aeb6-b789648f9880', // Fork2
+    ];
     try {
       savedRpc = localStorage.getItem('hief_fork_rpc');
       savedChainId = parseInt(localStorage.getItem('hief_fork_chainid') || '', 10) || null;
+      // Clear stale fork URLs so the new server default takes effect
+      if (savedRpc && STALE_FORK_URLS.indexOf(savedRpc) !== -1) {
+        localStorage.removeItem('hief_fork_rpc');
+        localStorage.removeItem('hief_fork_chainid');
+        savedRpc = null; savedChainId = null;
+      }
     } catch(e) {}
 
     var res = await fetch(SOLVER_API+'/v1/solver-network/config');

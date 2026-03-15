@@ -75,6 +75,14 @@ export interface QuoteParams {
 
 export type CallData = { to: string; value: bigint; data: string };
 
+/** Token entry for protocol-specific faucet funding (test environments only) */
+export interface FaucetTokenDef {
+  symbol: string;
+  address: string;   // empty string for native ETH
+  decimals: number;
+  defaultAmount: string;  // human-readable, e.g. '1000'
+}
+
 // ─── Plugin Interface ─────────────────────────────────────────────────────────
 
 /**
@@ -94,6 +102,11 @@ export interface DefiProtocolAdapter {
   readonly supportedSkills: DefiSkillType[];
   /** Optional: upstream skill source URL (e.g. GitHub SKILL.md repository) */
   readonly skillSource?: string;
+  /**
+   * Tokens this protocol needs funded on test forks.
+   * Automatically merged into the /faucet endpoint's available assets.
+   */
+  readonly faucetTokens?: FaucetTokenDef[];
 
   /** Returns true if this adapter can handle (token, skill) */
   supportsToken(token: string, skill: DefiSkillType): boolean;
@@ -132,6 +145,20 @@ export class DefiSkillRegistry {
   /** All adapters that support a given skill type */
   getForSkill(skill: DefiSkillType): DefiProtocolAdapter[] {
     return this.getAll().filter(a => a.supportedSkills.includes(skill));
+  }
+
+  /**
+   * Merge all adapter faucetTokens into a single map (keyed by UPPERCASE symbol).
+   * Used by the /faucet endpoint to auto-discover protocol-required tokens.
+   */
+  getFaucetTokens(): Record<string, FaucetTokenDef> {
+    const result: Record<string, FaucetTokenDef> = {};
+    for (const adapter of this.getAll()) {
+      for (const t of adapter.faucetTokens ?? []) {
+        result[t.symbol.toUpperCase()] = t;
+      }
+    }
+    return result;
   }
 
   /** All adapters that can quote (skill, token) */
@@ -208,6 +235,12 @@ export class AaveV3Adapter implements DefiProtocolAdapter {
   readonly description = 'Aave v3 lending protocol — earn yield by supplying assets, or withdraw your deposits.';
   readonly supportedChains = [1, 8453, 31337];
   readonly supportedSkills: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW'];
+  readonly faucetTokens: FaucetTokenDef[] = [
+    { symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6,  defaultAmount: '1000' },
+    { symbol: 'USDT', address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', decimals: 6,  defaultAmount: '1000' },
+    { symbol: 'DAI',  address: '0x6B175474E89094C44Da98b954EedeAC495271d0F', decimals: 18, defaultAmount: '1000' },
+    { symbol: 'WETH', address: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2', decimals: 18, defaultAmount: '1'    },
+  ];
 
   supportsToken(token: string, skill: DefiSkillType): boolean {
     const key = token.toLowerCase();
@@ -392,6 +425,10 @@ export class LidoAdapter implements DefiProtocolAdapter {
   readonly description = 'Lido liquid staking — stake ETH to receive stETH and earn staking rewards.';
   readonly supportedChains = [1, 31337]; // Ethereum mainnet + local fork
   readonly supportedSkills: DefiSkillType[] = ['STAKE', 'UNSTAKE'];
+  readonly faucetTokens: FaucetTokenDef[] = [
+    { symbol: 'stETH',  address: '0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84', decimals: 18, defaultAmount: '1' },
+    { symbol: 'wstETH', address: '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0', decimals: 18, defaultAmount: '1' },
+  ];
 
   supportsToken(token: string, skill: DefiSkillType): boolean {
     const key = token.toLowerCase();
@@ -515,6 +552,12 @@ skillMarket.register(
     chainIds: [1],
     sdk: '@aladdindao/fx-sdk',
     author: 'AladdinDAO',
+    faucetTokens: [
+      { symbol: 'USDC',   address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6,  defaultAmount: '1000' },
+      { symbol: 'wstETH', address: '0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0', decimals: 18, defaultAmount: '1'    },
+      { symbol: 'WBTC',   address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', decimals: 8,  defaultAmount: '0.05' },
+      { symbol: 'fxUSD',  address: '0x085780639CC2cACd35E474e71f4d000e2405d8f6', decimals: 18, defaultAmount: '1000' },
+    ],
   },
   new FxProtocolAdapter(),
 );

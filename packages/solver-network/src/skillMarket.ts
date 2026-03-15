@@ -10,7 +10,7 @@
  *   skillMarket.get(id)   → single manifest by id
  */
 
-import { defiRegistry, type DefiProtocolAdapter } from './defiSkills';
+import { defiRegistry, type DefiProtocolAdapter, type FaucetTokenDef } from './defiSkills';
 
 // ─── SkillManifest ────────────────────────────────────────────────────────────
 
@@ -36,6 +36,11 @@ export interface SkillManifest {
   sdk?: string;
   /** Author / maintainer */
   author?: string;
+  /**
+   * Tokens required for testing this protocol on Tenderly forks.
+   * Auto-merged into the /faucet endpoint when the skill is registered.
+   */
+  faucetTokens?: FaucetTokenDef[];
 }
 
 // ─── SkillMarket ──────────────────────────────────────────────────────────────
@@ -55,6 +60,10 @@ export class SkillMarket {
    */
   register(manifest: SkillManifest, adapter: DefiProtocolAdapter): this {
     this.manifests.set(manifest.id, manifest);
+    // Merge manifest-level faucetTokens into the adapter so getFaucetTokens() picks them up
+    if (manifest.faucetTokens?.length && !adapter.faucetTokens?.length) {
+      (adapter as any).faucetTokens = manifest.faucetTokens;
+    }
     defiRegistry.register(adapter);
     console.log(
       `[SkillMarket] + ${manifest.name} v${manifest.version}` +

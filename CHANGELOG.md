@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Protocol-declared faucet tokens + HIEFMainnetFork3 default (2026-03-15)
+
+Each DeFi adapter can now declare the tokens it needs funded on test forks via `faucetTokens?: FaucetTokenDef[]`.
+These are auto-merged into the `/faucet` endpoint at server startup — no manual `FAUCET_TOKENS` edits needed when integrating new protocols.
+
+**Changes:**
+- `packages/solver-network/src/defiSkills.ts`: Added `FaucetTokenDef` type + optional `faucetTokens` to `DefiProtocolAdapter` interface. Added `getFaucetTokens()` to `DefiSkillRegistry`. Declared faucetTokens on `AaveV3Adapter` (USDC/USDT/DAI/WETH) and `LidoAdapter` (stETH/wstETH). Added faucetTokens to fx-protocol manifest (USDC/wstETH/WBTC/fxUSD).
+- `packages/solver-network/src/skillMarket.ts`: Added `faucetTokens?` to `SkillManifest`; `register()` merges manifest tokens into adapter.
+- `packages/solver-network/src/server.ts`: Default `TENDERLY_RPC_URL` → HIEFMainnetFork3. `FAUCET_TOKENS` base trimmed to ETH/WETH/USDC; adapter tokens merged via `defiRegistry.getFaucetTokens()` at module init.
+- `apps/explorer/index.html`: Quick preset updated to HIEFMainnetFork3. `loadConfig()` auto-clears stale Fork2 localStorage entry so new default takes effect immediately.
+
+---
+
 ### Fixed — Multi-tx execution + receipt status check + leverage simulation (2026-03-15)
 
 Three compounding bugs causing leverage positions to silently fail:
