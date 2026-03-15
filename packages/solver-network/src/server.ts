@@ -1965,7 +1965,9 @@ app.post('/v1/solver-network/config', (req: Request, res: Response) => {
 
 // Pre-configured test accounts for the three execution modes.
 // These are Tenderly fork accounts funded with test ETH — DO NOT use on mainnet.
-const TEST_WALLETS = [
+// Mutable at runtime: POST /update-default-wallet can change SAFE_MULTISIG / SAFE_4337 address
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const TEST_WALLETS: any[] = [
   {
     type: 'EOA',
     label: 'EOA Wallet',
@@ -2115,11 +2117,46 @@ app.post('/v1/solver-network/create-smart-wallet', async (req: Request, res: Res
       await provider.send('tenderly_setBalance', [[safeAddress], hexAmount]);
     } catch { /* Non-critical — fork might not support setBalance */ }
 
+    // Auto-update the TEST_WALLETS slot so /test-wallets returns the new address immediately
+    const slotType = walletType === 'safe4337' ? 'SAFE_4337' : 'SAFE_MULTISIG';
+    const idx = TEST_WALLETS.findIndex(w => w.type === slotType);
+    if (idx !== -1) {
+      TEST_WALLETS[idx] = { ...TEST_WALLETS[idx], address: safeAddress, owners, threshold };
+    }
+
     res.json({ success: true, data: { safeAddress, walletType, owners, threshold } });
   } catch (err: any) {
     console.error('[CreateWallet] Error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// POST /v1/solver-network/update-default-wallet — update the default address for a wallet type
+// Called after deploying a new Safe to persist it as the default for that slot.
+app.post('/v1/solver-network/update-default-wallet', (req: Request, res: Response) => {
+  const { walletType, address, owners, threshold } = req.body as {
+    walletType: 'SAFE_MULTISIG' | 'SAFE_4337';
+    address: string;
+    owners?: string[];
+    threshold?: number;
+  };
+  if (!walletType || !address || !ethers.isAddress(address)) {
+    res.status(400).json({ success: false, error: 'walletType and valid address required' });
+    return;
+  }
+  const idx = TEST_WALLETS.findIndex(w => w.type === (walletType === 'SAFE_MULTISIG' ? 'SAFE_MULTISIG' : 'SAFE_4337'));
+  if (idx === -1) {
+    res.status(404).json({ success: false, error: `No wallet slot for type ${walletType}` });
+    return;
+  }
+  TEST_WALLETS[idx] = {
+    ...TEST_WALLETS[idx],
+    address,
+    ...(owners   && { owners }),
+    ...(threshold && { threshold }),
+  };
+  console.log(`[DefaultWallet] Updated ${walletType} default → ${address}`);
+  res.json({ success: true, data: { walletType, address } });
 });
 
 // ─── Start ──────────────────────────────────────────────────────────────────────────────────────

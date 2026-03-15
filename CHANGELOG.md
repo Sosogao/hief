@@ -7,6 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Show deployed contract + set-as-default + wallet sync (2026-03-15)
+
+- `packages/solver-network/src/server.ts`:
+  - `TEST_WALLETS` changed to `const any[]` (mutable entries); auto-updated in `create-smart-wallet` after deploy
+  - New `POST /update-default-wallet`: updates SAFE_MULTISIG or SAFE_4337 slot address at runtime; persists for the server session
+- `apps/explorer/index.html`:
+  - `setActiveWallet(address, skipLookup?)`: single function that syncs `#addressInput`, `#chatWallet`, card highlight, and `localStorage['hief_active_wallet']`
+  - `selectTestWallet` and `useCreatedWallet` both delegate to `setActiveWallet`
+  - On page load: restore `hief_active_wallet` from localStorage (overrides hardcoded HTML default)
+  - After create: rich result card showing contract address + "Use as Active Wallet" + "⭐ Set as Default" + "📋 Copy" buttons
+  - `setAsServerDefault(walletType, address, owners, threshold)`: calls `/update-default-wallet` then refreshes wallet list
+  - Each SAFE wallet card gains a "⭐ Default" button to re-promote any address after the fact
+
+---
+
 ### Fixed — Deploy button in Create Smart Wallet modal does nothing (2026-03-15)
 
 **Root cause**: `doCreateWallet()` called `hideCreateWalletModal()` first, which sets `_pendingCreateWalletType = null`. The subsequent `if (_pendingCreateWalletType)` check was always false, so `createSmartWallet()` was never invoked — silent no-op.

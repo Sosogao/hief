@@ -1828,7 +1828,10 @@ function renderTestWallets(wallets) {
       ownersHtml = '<div style="font-size:10px;color:#64748b;margin-top:4px;">Owners: '+w.owners.map(function(o){return o.slice(0,8)+'...'}).join(', ')+'</div>';
     }
     var fundBtn = '<button onclick="openFaucetForAddress(event,\''+w.address+'\')" class="btn-fork-fund" style="font-size:10px;padding:3px 8px;margin-top:6px;">&#128167; Faucet</button>';
-    return '<div class="wallet-card '+cc+'" style="--wc-color:'+color+'" onclick="selectTestWallet(\''+w.address+'\',\''+w.type+'\')">'
+    var defaultBtn = (w.type === 'SAFE_MULTISIG' || w.type === 'SAFE_4337')
+      ? '<button onclick="event.stopPropagation();setAsServerDefault(\''+w.type+'\',\''+w.address+'\','+JSON.stringify(w.owners||[])+','+(w.threshold||1)+')" class="btn-fork-fund" style="font-size:10px;padding:3px 8px;margin-top:6px;background:rgba(99,102,241,0.15);border-color:rgba(99,102,241,0.4);color:#a5b4fc;">&#11088; Default</button>'
+      : '';
+    return '<div class="wallet-card '+cc+'" style="--wc-color:'+color+'" onclick="selectTestWallet(\''+w.address+'\')">'
       +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px;">'
       +'<div style="font-size:22px;">'+w.icon+'</div>'
       +badge
@@ -1837,27 +1840,38 @@ function renderTestWallets(wallets) {
       +'<div style="font-family:monospace;font-size:10px;color:#64748b;margin-bottom:6px;">'+shortAddr+'</div>'
       +'<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">'+w.description+'</div>'
       +ownersHtml
-      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:4px;">'
       +'<div style="font-size:11px;">Balance: '+balHtml+'</div>'
-      +fundBtn
+      +'<div style="display:flex;gap:4px;">'+fundBtn+defaultBtn+'</div>'
       +'</div>'
       +'</div>';
   }).join('') + aiCard;
 }
 
-function selectTestWallet(address, type) {
-  // Set the address in the search input and lookup
+/**
+ * Single source of truth for the active wallet.
+ * Syncs addressInput, chatWallet, card highlight, and localStorage.
+ */
+function setActiveWallet(address, skipLookup) {
+  if (!address) return;
+  // Sync all three inputs
   document.getElementById('addressInput').value = address;
-  // Also set in the AI chat wallet input
   var chatWalletInput = document.getElementById('chatWallet');
   if (chatWalletInput) chatWalletInput.value = address;
   checkSessionWalletMismatch(address);
-  // Highlight selected card
+  // Persist across page reloads
+  try { localStorage.setItem('hief_active_wallet', address); } catch(e) {}
+  // Highlight matching wallet card
   document.querySelectorAll('.wallet-card').forEach(function(c) { c.classList.remove('selected'); });
-  event && event.currentTarget && event.currentTarget.classList.add('selected');
-  // Scroll to search and trigger lookup
+  document.querySelectorAll('.wallet-card').forEach(function(c) {
+    if (c.innerHTML && c.innerHTML.indexOf(address.slice(0,10)) !== -1) c.classList.add('selected');
+  });
+  if (!skipLookup) lookupAddress();
+}
+
+function selectTestWallet(address) {
+  setActiveWallet(address);
   document.getElementById('addressInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  lookupAddress();
 }
 
 // ─── Faucet ────────────────────────────────────────────────────────────────────
@@ -2023,8 +2037,18 @@ async function createSmartWallet(walletType) {
     var json = await res.json();
     if (json.success) {
       var d = json.data;
+      var wTypeLabel = walletType === 'multisig' ? 'SAFE_MULTISIG' : 'SAFE_4337';
       statusEl.style.color = '#4ade80';
-      statusEl.innerHTML = '✅ Created! <span style="font-family:monospace;font-size:11px;">' + d.safeAddress + '</span> — now set as active wallet.';
+      statusEl.innerHTML =
+        '<div style="background:rgba(74,222,128,0.08);border:1px solid rgba(74,222,128,0.25);border-radius:8px;padding:10px;margin-top:4px;">'
+        + '<div style="font-weight:600;margin-bottom:6px;">✅ '+(walletType==='multisig'?'Safe Multisig':'Safe+ERC-4337')+' deployed!</div>'
+        + '<div style="font-family:monospace;font-size:11px;color:#86efac;word-break:break-all;margin-bottom:8px;">'+d.safeAddress+'</div>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+        + '<button onclick="setActiveWallet(\''+d.safeAddress+'\')" style="background:rgba(74,222,128,0.15);border:1px solid rgba(74,222,128,0.4);color:#4ade80;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">✓ Use as Active Wallet</button>'
+        + '<button onclick="setAsServerDefault(\''+wTypeLabel+'\',\''+d.safeAddress+'\','+JSON.stringify(d.owners)+','+d.threshold+')" style="background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);color:#a5b4fc;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">⭐ Set as Default</button>'
+        + '<button onclick="navigator.clipboard.writeText(\''+d.safeAddress+'\')" style="background:rgba(100,116,139,0.15);border:1px solid rgba(100,116,139,0.3);color:#94a3b8;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">📋 Copy</button>'
+        + '</div>'
+        + '</div>';
       // Auto-switch to the new wallet and refresh test wallet list
       useCreatedWallet(d.safeAddress);
       setTimeout(loadTestWallets, 500);
@@ -2039,19 +2063,39 @@ async function createSmartWallet(walletType) {
 }
 
 function useCreatedWallet(address) {
-  document.getElementById('addressInput').value = address;
-  var chatWalletInput = document.getElementById('chatWallet');
-  if (chatWalletInput) chatWalletInput.value = address;
-  checkSessionWalletMismatch(address);
   hideCreateWalletPanel();
-  document.getElementById('addressInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
-  lookupAddress();
+  setActiveWallet(address);
+}
+
+/** Push a newly created Safe address as the server-side default for that wallet type slot */
+async function setAsServerDefault(walletType, address, owners, threshold) {
+  try {
+    var res = await fetch(SOLVER_API+'/v1/solver-network/update-default-wallet', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ walletType, address, owners, threshold })
+    });
+    var json = await res.json();
+    if (json.success) {
+      setTimeout(loadTestWallets, 200);
+      alert('✅ Default updated! ' + walletType + ' → ' + address.slice(0,10) + '...\nOther users on this session will now see the new address.');
+    } else {
+      alert('❌ Failed: ' + (json.error || 'unknown'));
+    }
+  } catch(e) { alert('❌ ' + e.message); }
 }
 
 // Initialize config and test wallets on page load
 loadConfig();
 loadTestWallets();
 renderRecentInputs();
+
+// Restore persisted active wallet (overrides hardcoded default in HTML)
+try {
+  var _savedWallet = localStorage.getItem('hief_active_wallet');
+  if (_savedWallet && /^0x[0-9a-fA-F]{40}$/.test(_savedWallet)) {
+    setActiveWallet(_savedWallet, true); // skipLookup on init
+  }
+} catch(e) {}
 </script>
 </body>
 </html>
