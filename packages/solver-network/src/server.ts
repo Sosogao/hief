@@ -1963,6 +1963,34 @@ app.post('/v1/solver-network/config', (req: Request, res: Response) => {
 
 // ─── Test Wallets API ──────────────────────────────────────────────────────────────────────────────────────
 
+// ─── Wallet config persistence ───────────────────────────────────────────────
+// Overrides for SAFE_MULTISIG / SAFE_4337 addresses are saved here so they
+// survive server restarts.  The file lives next to the compiled JS output.
+const WALLET_CONFIG_PATH = path.resolve(__dirname, '../wallet-config.json');
+
+function loadWalletConfig(): Record<string, { address: string; owners?: string[]; threshold?: number }> {
+  try {
+    if (fs.existsSync(WALLET_CONFIG_PATH)) {
+      return JSON.parse(fs.readFileSync(WALLET_CONFIG_PATH, 'utf-8'));
+    }
+  } catch { /* ignore parse errors */ }
+  return {};
+}
+
+function saveWalletConfig() {
+  const overrides: Record<string, { address: string; owners?: string[]; threshold?: number }> = {};
+  for (const w of TEST_WALLETS) {
+    if (w.type === 'SAFE_MULTISIG' || w.type === 'SAFE_4337') {
+      overrides[w.type] = { address: w.address, owners: w.owners, threshold: w.threshold };
+    }
+  }
+  try {
+    fs.writeFileSync(WALLET_CONFIG_PATH, JSON.stringify(overrides, null, 2), 'utf-8');
+  } catch (e: any) {
+    console.warn(`[WalletConfig] Failed to save wallet-config.json: ${e.message}`);
+  }
+}
+
 // Pre-configured test accounts for the three execution modes.
 // These are Tenderly fork accounts funded with test ETH — DO NOT use on mainnet.
 // Mutable at runtime: POST /update-default-wallet can change SAFE_MULTISIG / SAFE_4337 address
@@ -2010,6 +2038,18 @@ const TEST_WALLETS: any[] = [
     note: 'AI builds UserOp. User signs with MetaMask. EntryPoint → Safe4337Module → Safe.',
   },
 ];
+
+// Apply persisted overrides (survive server restart)
+{
+  const saved = loadWalletConfig();
+  for (const [type, override] of Object.entries(saved)) {
+    const idx = TEST_WALLETS.findIndex(w => w.type === type);
+    if (idx !== -1) {
+      TEST_WALLETS[idx] = { ...TEST_WALLETS[idx], ...override };
+      console.log(`[WalletConfig] Restored ${type} → ${override.address}`);
+    }
+  }
+}
 
 // GET /v1/solver-network/test-wallets — return pre-configured test wallet info
 app.get('/v1/solver-network/test-wallets', async (_req: Request, res: Response) => {
@@ -2122,6 +2162,7 @@ app.post('/v1/solver-network/create-smart-wallet', async (req: Request, res: Res
     const idx = TEST_WALLETS.findIndex(w => w.type === slotType);
     if (idx !== -1) {
       TEST_WALLETS[idx] = { ...TEST_WALLETS[idx], address: safeAddress, owners, threshold };
+      saveWalletConfig();
     }
 
     res.json({ success: true, data: { safeAddress, walletType, owners, threshold } });
@@ -2155,6 +2196,7 @@ app.post('/v1/solver-network/update-default-wallet', (req: Request, res: Respons
     ...(owners   && { owners }),
     ...(threshold && { threshold }),
   };
+  saveWalletConfig();
   console.log(`[DefaultWallet] Updated ${walletType} default → ${address}`);
   res.json({ success: true, data: { walletType, address } });
 });
