@@ -369,8 +369,18 @@ export async function submitUserOperation(
 
   console.log(`[ERC4337] Submitting via direct EntryPoint.handleOps() | sender=${userOp.sender.slice(0, 10)}...`);
 
+  let handleOpsGasLimit: bigint;
+  try {
+    const estimated = await entryPoint.handleOps.estimateGas([userOp], wallet.address);
+    handleOpsGasLimit = estimated * 125n / 100n;
+    console.log(`[ERC4337] Gas estimated: ${estimated} → using ${handleOpsGasLimit}`);
+  } catch (estErr: any) {
+    const reason = (estErr as any)?.info?.error?.message ?? (estErr as any)?.message ?? String(estErr);
+    throw new Error(`ERC4337 handleOps gas estimation failed: ${reason.slice(0, 300)}`);
+  }
+
   const tx = await entryPoint.handleOps([userOp], wallet.address, {
-    gasLimit: 2_000_000,
+    gasLimit: handleOpsGasLimit,
   });
   const receipt = await tx.wait();
 

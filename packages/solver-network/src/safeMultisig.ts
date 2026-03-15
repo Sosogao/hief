@@ -415,7 +415,7 @@ export async function executeWithSignatures(params: {
   console.log(`[SafeMultisig] Executing Safe TX | to: ${safeTx.to} | nonce: ${safeTx.nonce}`);
   console.log(`[SafeMultisig] Signers: ${signer1.slice(0,10)}... & ${signer2.slice(0,10)}...`);
 
-  const tx = await safeContract.execTransaction(
+  const execArgs = [
     safeTx.to,
     BigInt(safeTx.value),
     safeTx.data,
@@ -426,8 +426,19 @@ export async function executeWithSignatures(params: {
     safeTx.gasToken,
     safeTx.refundReceiver,
     packedSigs,
-    { gasLimit: 500000 }
-  );
+  ] as const;
+
+  let gasLimit: bigint;
+  try {
+    const estimated = await safeContract.execTransaction.estimateGas(...execArgs);
+    gasLimit = estimated * 125n / 100n; // 25% buffer
+    console.log(`[SafeMultisig] Gas estimated: ${estimated} → using ${gasLimit}`);
+  } catch (estErr: any) {
+    const reason = estErr?.info?.error?.message ?? estErr?.message ?? String(estErr);
+    throw new Error(`Safe execTransaction gas estimation failed (tx would revert): ${reason.slice(0, 300)}`);
+  }
+
+  const tx = await safeContract.execTransaction(...execArgs, { gasLimit });
 
   const receipt = await tx.wait();
   const txHash = receipt?.hash || tx.hash;

@@ -494,9 +494,19 @@ export async function submitSafe4337UserOp(params: {
     userOp.signature,
   ];
 
-  // Submit via handleOps
+  // Submit via handleOps (dynamic gas estimation)
+  let handleOpsGasLimit: bigint;
+  try {
+    const estimated = await ep.handleOps.estimateGas([userOpTuple], submitter.address);
+    handleOpsGasLimit = estimated * 125n / 100n;
+    console.log(`[Safe4337] Gas estimated: ${estimated} → using ${handleOpsGasLimit}`);
+  } catch (estErr: any) {
+    const reason = estErr?.info?.error?.message ?? estErr?.message ?? String(estErr);
+    throw new Error(`Safe4337 handleOps gas estimation failed: ${reason.slice(0, 300)}`);
+  }
+
   const tx = await ep.handleOps([userOpTuple], submitter.address, {
-    gasLimit: 1_000_000,
+    gasLimit: handleOpsGasLimit,
   });
 
   const receipt = await tx.wait();
@@ -604,7 +614,10 @@ export async function deployNewSafe4337Account(params: {
   ]);
 
   const factory = new ethers.Contract(SAFE_PROXY_FACTORY_V141, SAFE_PROXY_FACTORY_ABI_DEPLOY, deployer);
-  const tx = await factory.createProxyWithNonce(SAFE_L2_V141, setupData, saltNonce, { gasLimit: 500_000 });
+  const deployGasLimit4337 = await factory.createProxyWithNonce.estimateGas(SAFE_L2_V141, setupData, saltNonce)
+    .then((e: bigint) => e * 125n / 100n)
+    .catch(() => 500_000n);
+  const tx = await factory.createProxyWithNonce(SAFE_L2_V141, setupData, saltNonce, { gasLimit: deployGasLimit4337 });
   const receipt = await tx.wait();
 
   // Extract address from ProxyCreation event
@@ -653,7 +666,10 @@ export async function deployNewSafeMultisig(params: {
   ]);
 
   const factory = new ethers.Contract(SAFE_PROXY_FACTORY_V141, SAFE_PROXY_FACTORY_ABI_DEPLOY, deployer);
-  const tx = await factory.createProxyWithNonce(SAFE_L2_V141, setupData, saltNonce, { gasLimit: 500_000 });
+  const deployGasLimitMultisig = await factory.createProxyWithNonce.estimateGas(SAFE_L2_V141, setupData, saltNonce)
+    .then((e: bigint) => e * 125n / 100n)
+    .catch(() => 500_000n);
+  const tx = await factory.createProxyWithNonce(SAFE_L2_V141, setupData, saltNonce, { gasLimit: deployGasLimitMultisig });
   const receipt = await tx.wait();
 
   const proxyCreationTopic = ethers.id('ProxyCreation(address,address)');
