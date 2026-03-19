@@ -165,15 +165,12 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         t => typeof t.data === 'string' && t.data.startsWith('0x095ea7b3'),
       );
 
-      let needsApproval = false;
-      let approveTarget = '';
-
+      // Build allCalls so simulation uses tenderly_simulateBundle (approve + deposit in order)
+      const allCalls: CallData[] = [];
       if (approveTx) {
-        needsApproval = true;
-        // Extract spender from approve calldata:
-        // 0x (2) + selector 8 chars + 24 leading zeros + 40 addr = offset 34, length 40
-        approveTarget = '0x' + approveTx.data.slice(34, 74);
+        allCalls.push({ to: approveTx.to, value: 0n, data: approveTx.data as string, description: 'Approve USDC' });
       }
+      allCalls.push({ to: mainTx.to, value: mainTx.value ?? 0n, data: mainTx.data as string, description: 'Deposit to fxSAVE' });
 
       const apySdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
       const apy = await this._fetchApy(apySdk);
@@ -191,8 +188,9 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         contractTo: mainTx.to,
         calldata: mainTx.data as string,
         value: mainTx.value ?? 0n,
-        needsApproval,
-        approveTarget,
+        allCalls,
+        needsApproval: false,  // handled via allCalls
+        approveTarget: '',
         route: `f(x) Protocol fxSAVE Deposit USDC${apy > 0 ? ` (${apy.toFixed(2)}% APY est.)` : ''}`,
         priceImpactBps: 0,
       };
@@ -252,13 +250,12 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
 
       this.fxSaveAddress = fxSaveAddr;
 
-      let needsApproval = false;
-      let approveTarget = '';
-
+      // Build allCalls so simulation uses tenderly_simulateBundle (approve + withdraw in order)
+      const allCalls: CallData[] = [];
       if (approveTx) {
-        needsApproval = true;
-        approveTarget = '0x' + approveTx.data.slice(34, 74);
+        allCalls.push({ to: approveTx.to, value: 0n, data: approveTx.data as string, description: 'Approve fxSAVE' });
       }
+      allCalls.push({ to: mainTx.to, value: mainTx.value ?? 0n, data: mainTx.data as string, description: 'Withdraw fxSAVE → USDC' });
 
       return {
         protocol: this.name,
@@ -273,8 +270,9 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         contractTo: mainTx.to,
         calldata: mainTx.data as string,
         value: mainTx.value ?? 0n,
-        needsApproval,
-        approveTarget,
+        allCalls,
+        needsApproval: false,  // handled via allCalls
+        approveTarget: '',
         receiptTokenIn: fxSaveAddr,
         route: 'f(x) Protocol fxSAVE Instant Withdraw → USDC',
         priceImpactBps: 0,
@@ -377,6 +375,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const targets = forkSafeTargets(routingMode);
 
       // Always use fxUSD as inputTokenAddress — f(x) short collateral is fxUSD
+      // slippage: 5% — fork price may diverge from SDK quote time, FxRoute 2 has tight price checks
       const result = await sdk.increasePosition({
         market,
         type: 'short',
@@ -384,7 +383,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         leverage: leverageMultiplier,
         inputTokenAddress: FXUSD_ADDRESS.toLowerCase() as any,
         amount: amountIn,
-        slippage: 1,
+        slippage: 5,
         userAddress: recipient,
         ...(targets ? { targets: targets as any } : {}),
       });
