@@ -392,9 +392,18 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const route = result.routes[0];
       if (!route || route.txs.length === 0) return null;
 
+      // Debug: log SDK tx breakdown for SHORT to diagnose approve issues
+      console.log(`[FxProtocol] SHORT route.txs (${route.txs.length} txs, type=${route.routeType}):`,
+        route.txs.map((tx, i) => ({
+          idx: i,
+          to: tx.to,
+          selector: (tx.data as string)?.slice(0, 10),
+          valueStr: tx.value?.toString() ?? '0',
+        }))
+      );
+
       const marketToken = market === 'ETH' ? 'wstETH' : 'WBTC';
-      const allCalls: CallData[] = route.txs.map((tx, idx) => {
-        // Detect approve token from the tx recipient (ERC20 approve: to = token address)
+      const mappedCalls: CallData[] = route.txs.map((tx, idx) => {
         let desc: string;
         if (idx === 0 && route.txs.length > 1) {
           const toAddr = tx.to?.toLowerCase() ?? '';
@@ -408,6 +417,26 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         }
         return { to: tx.to, value: tx.value ?? 0n, data: tx.data as string, description: desc };
       });
+
+      // If SDK returned only 1 tx (no approve), inject fxUSD approve ourselves.
+      // Some SDK versions omit the approve when they detect an existing allowance via RPC;
+      // on a fresh fork or after previous simulation the allowance may be insufficient.
+      const hasApprove = mappedCalls.length > 1 ||
+        (mappedCalls[0]?.data?.startsWith('0x095ea7b3') ?? false);
+      const positionTx = mappedCalls[mappedCalls.length - 1];
+      let allCalls: CallData[];
+      if (!hasApprove) {
+        const iface = new ethers.Interface(['function approve(address,uint256) returns (bool)']);
+        // Spender = position tx recipient (the router/position contract)
+        const approveData = iface.encodeFunctionData('approve', [positionTx.to, ethers.MaxUint256]);
+        allCalls = [
+          { to: FXUSD_ADDRESS, value: 0n, data: approveData, description: 'Approve fxUSD' },
+          { ...positionTx, description: `Open ${leverageMultiplier}x Short ${marketToken} (${market})` },
+        ];
+        console.log('[FxProtocol] SHORT: SDK omitted approve — injected fxUSD approve manually');
+      } else {
+        allCalls = mappedCalls;
+      }
 
       return {
         protocol: this.name,
