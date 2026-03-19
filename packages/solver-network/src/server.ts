@@ -438,6 +438,45 @@ async function generateQuote(
 // ─── Settlement Engine ───────────────────────────────────────────────────────
 // TENDERLY_RPC is an alias for TENDERLY_RPC_URL (kept for backward compat with simulateSettlement)
 // Note: use TENDERLY_RPC_URL (the let variable) for all new code so runtime updates take effect
+
+/**
+ * SHORT positions on f(x) Protocol fail when the Tenderly fork's block.timestamp has drifted
+ * far ahead of the Chainlink oracle's last updatedAt (because many blocks were mined on the fork,
+ * each advancing timestamp by ~12s).  The protocol's oracle staleness check then reverts.
+ *
+ * Fix: before simulating / executing a SHORT position, reset the fork's block.timestamp to
+ * oracle.updatedAt + 60 using evm_setNextBlockTimestamp + evm_mine.  This is a no-op on
+ * mainnet (oracle is always fresh) and harmless on fresh forks (staleness < threshold).
+ */
+const CHAINLINK_ORACLE_ADDRS: Record<string, string> = {
+  ETH: '0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419', // ETH/USD
+  BTC: '0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88b', // BTC/USD
+};
+const CHAINLINK_ABI = ['function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)'];
+
+async function warmupForkOracleIfNeeded(rpcUrl: string, market: string): Promise<void> {
+  const oracleAddr = CHAINLINK_ORACLE_ADDRS[market.toUpperCase()];
+  if (!oracleAddr) return;
+  try {
+    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const oracle = new ethers.Contract(oracleAddr, CHAINLINK_ABI, provider);
+    const roundData = await oracle.latestRoundData();
+    const updatedAt = Number(roundData.updatedAt);
+    const block = await provider.getBlock('latest');
+    const blockTs = block?.timestamp ?? 0;
+    const staleness = blockTs - updatedAt;
+    if (staleness > 1800) { // >30 minutes stale — reset fork timestamp
+      const newTs = updatedAt + 60;
+      await provider.send('evm_setNextBlockTimestamp', ['0x' + newTs.toString(16)]);
+      await provider.send('evm_mine', []);
+      console.log(`[OracleWarmup] ${market} oracle stale by ${staleness}s — reset fork timestamp to ${newTs} (oracle+60)`);
+    } else {
+      console.log(`[OracleWarmup] ${market} oracle fresh (staleness=${staleness}s), no warmup needed`);
+    }
+  } catch (e: any) {
+    console.warn(`[OracleWarmup] warmup failed for ${market}: ${e.message?.slice(0, 100)}`);
+  }
+}
 /**
  * Pick the right DexQuote for on-chain execution on the Tenderly fork.
  * Odos calldata is generated from live mainnet state and will revert on a diverged fork.
@@ -533,6 +572,15 @@ async function simulateSettlement(
   let txStepResults: SimulationResult['txSteps'];
 
   try {
+    // ── Oracle warmup for SHORT positions ───────────────────────────────────────
+    // f(x) Protocol SHORT positions go through the fxUSD stability pool and
+    // fail when the fork's block.timestamp has drifted far ahead of the oracle's
+    // last update (from too many blocks mined on the fork).
+    // Reset the fork's timestamp to oracle.updatedAt + 60 before simulating.
+    if (skillQ?.leverageInfo?.positionType === 'short' && skillQ.leverageInfo.market) {
+      await warmupForkOracleIfNeeded(TENDERLY_RPC_URL, skillQ.leverageInfo.market);
+    }
+
     const approveIface = new ethers.Interface(['function approve(address spender, uint256 amount) returns (bool)']);
 
     if (skillQ?.allCalls && skillQ.allCalls.length > 0) {
@@ -808,6 +856,11 @@ async function settleOnChain(
   const skillQ: DefiSkillQuote | undefined = winner?.defiSkillQuote;
   // Use fork-compatible execution quote (UniV3); Odos calldata uses live mainnet state and reverts on diverged fork
   const swapQ: DexQuote | undefined = skillQ ? undefined : (winner ? getExecQuote(winner) : undefined);
+
+  // Oracle warmup: same as simulation — prevent oracle staleness revert on SHORT
+  if (skillQ?.leverageInfo?.positionType === 'short' && skillQ.leverageInfo.market) {
+    await warmupForkOracleIfNeeded(TENDERLY_RPC_URL, skillQ.leverageInfo.market);
+  }
 
   let txHash = '', blockNumber = 0;
   let approveTxHash: string | undefined;
