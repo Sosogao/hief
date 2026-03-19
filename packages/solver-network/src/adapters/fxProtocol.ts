@@ -127,19 +127,30 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
   }
 
   private async _quoteDeposit(params: QuoteParams): Promise<DefiSkillQuote | null> {
-    const { tokenIn, amountIn, recipient } = params;
+    const { tokenIn, amountIn, recipient, rpcUrl: forkRpcUrl } = params;
     try {
       if (tokenIn.toLowerCase() !== USDC_ADDRESS_LOWER) return null;
 
-      // Always use live mainnet RPC for quote building — fork state can be stale (expired epochs).
-      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      // Prefer live mainnet RPC (avoids stale epoch on fork), fallback to fork RPC if mainnet fails.
+      const rpcCandidates = [MAINNET_RPC_URL];
+      if (forkRpcUrl && forkRpcUrl !== MAINNET_RPC_URL) rpcCandidates.push(forkRpcUrl);
 
-      const result = await sdk.depositFxSave({
-        userAddress: recipient,
-        tokenIn: 'usdc',
-        amount: amountIn,
-        slippage: 0.5,
-      });
+      let result: Awaited<ReturnType<typeof FxSdk.prototype.depositFxSave>> | null = null;
+      let lastErr = '';
+      for (const rpc of rpcCandidates) {
+        try {
+          const sdk = new FxSdk({ rpcUrl: rpc, chainId: 1 });
+          result = await sdk.depositFxSave({ userAddress: recipient, tokenIn: 'usdc', amount: amountIn, slippage: 0.5 });
+          if (result?.txs?.length) break; // success
+        } catch (err: any) {
+          lastErr = err?.message ?? String(err);
+          console.warn(`[FxProtocol] depositFxSave failed with rpc=${rpc.slice(0, 50)}: ${lastErr.slice(0, 200)}`);
+        }
+      }
+      if (!result?.txs?.length) {
+        console.error(`[FxProtocol] deposit quote: all RPCs failed. Last error: ${lastErr.slice(0, 300)}`);
+        return null;
+      }
 
       const txs = result.txs;
       if (!txs || txs.length === 0) return null;
@@ -164,7 +175,8 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         approveTarget = '0x' + approveTx.data.slice(34, 74);
       }
 
-      const apy = await this._fetchApy(sdk);
+      const apySdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      const apy = await this._fetchApy(apySdk);
 
       return {
         protocol: this.name,
@@ -191,37 +203,42 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
   }
 
   private async _quoteWithdraw(params: QuoteParams): Promise<DefiSkillQuote | null> {
-    const { tokenIn, amountIn, recipient } = params;
+    const { tokenIn, amountIn, recipient, rpcUrl: forkRpcUrl } = params;
     try {
       if (tokenIn.toLowerCase() !== USDC_ADDRESS_LOWER) return null;
 
-      // Always use live mainnet RPC for quote building — fork state can be stale.
-      const sdk = new FxSdk({ rpcUrl: MAINNET_RPC_URL, chainId: 1 });
+      // Prefer live mainnet RPC; fallback to fork RPC if mainnet is unreachable.
+      const rpcCandidates = [MAINNET_RPC_URL];
+      if (forkRpcUrl && forkRpcUrl !== MAINNET_RPC_URL) rpcCandidates.push(forkRpcUrl);
 
-      // Convert USDC amount to fxSAVE shares via config
-      // shares = amountIn * totalSupplyWei / totalAssetsWei
-      let sharesAmount: bigint;
-      try {
-        const config = await sdk.getFxSaveConfig();
-        if (config.totalAssetsWei > 0n) {
-          sharesAmount = (amountIn * config.totalSupplyWei) / config.totalAssetsWei;
-        } else {
-          sharesAmount = amountIn;
+      let result: Awaited<ReturnType<typeof FxSdk.prototype.withdrawFxSave>> | null = null;
+      let lastErr = '';
+      for (const rpc of rpcCandidates) {
+        try {
+          const sdk = new FxSdk({ rpcUrl: rpc, chainId: 1 });
+
+          // Convert USDC amount to fxSAVE shares via config
+          let sharesAmount: bigint;
+          try {
+            const config = await sdk.getFxSaveConfig();
+            sharesAmount = config.totalAssetsWei > 0n
+              ? (amountIn * config.totalSupplyWei) / config.totalAssetsWei
+              : amountIn;
+          } catch { sharesAmount = amountIn; }
+
+          result = await sdk.withdrawFxSave({ userAddress: recipient, tokenOut: 'usdc', amount: sharesAmount, instant: true, slippage: 0.5 });
+          if (result?.txs?.length) break;
+        } catch (err: any) {
+          lastErr = err?.message ?? String(err);
+          console.warn(`[FxProtocol] withdrawFxSave failed with rpc=${rpc.slice(0, 50)}: ${lastErr.slice(0, 200)}`);
         }
-      } catch {
-        sharesAmount = amountIn;
+      }
+      if (!result?.txs?.length) {
+        console.error(`[FxProtocol] withdraw quote: all RPCs failed. Last error: ${lastErr.slice(0, 300)}`);
+        return null;
       }
 
-      const result = await sdk.withdrawFxSave({
-        userAddress: recipient,
-        tokenOut: 'usdc',
-        amount: sharesAmount,
-        instant: true,
-        slippage: 0.5,
-      });
-
       const txs = result.txs;
-      if (!txs || txs.length === 0) return null;
 
       const mainTx = txs[txs.length - 1];
 
