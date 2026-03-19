@@ -550,9 +550,24 @@ async function simulateSettlement(
         if (!simSuccess) {
           const failedStep = txStepResults.find(s => s.status === 'reverted');
           const failedTenderly = results.find((r: any) => r.status !== true);
-          simError = failedTenderly?.error?.message
-            || failedTenderly?.revert_reason
-            || `"${failedStep?.description}" reverted — check token balance and approval`;
+          // Log raw Tenderly failure for debugging
+          console.error('[Sim] tenderly_simulateBundle step failed:', JSON.stringify({
+            error: failedTenderly?.error,
+            revert_reason: failedTenderly?.revert_reason,
+            output: failedTenderly?.output?.slice(0, 200),
+            errorMessage: failedTenderly?.errorMessage,
+            gasUsed: failedTenderly?.gasUsed,
+          }, null, 2));
+          const tenderlyReason =
+            failedTenderly?.error?.message ||
+            failedTenderly?.revert_reason ||
+            failedTenderly?.errorMessage ||
+            (failedTenderly?.output && failedTenderly.output !== '0x'
+              ? `revert data: ${failedTenderly.output.slice(0, 138)}`
+              : undefined);
+          simError = tenderlyReason
+            ? `"${failedStep?.description}" reverted: ${tenderlyReason}`
+            : `"${failedStep?.description}" reverted — check token balance and approval`;
         }
       }
     } else if (skillQ?.needsApproval) {
