@@ -293,6 +293,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const sdk = new FxSdk({ rpcUrl: leverageSdkRpcUrl(params), chainId: 1 });
       const targets = forkSafeTargets(routingMode);
 
+      // slippage: 5% — fork price may diverge from SDK quote time, FxRoute has tight price checks
       const result = await sdk.increasePosition({
         market,
         type: 'long',
@@ -300,7 +301,7 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
         leverage: leverageMultiplier,
         inputTokenAddress: tokenIn.toLowerCase() as any,
         amount: amountIn,
-        slippage: 1,
+        slippage: 5,
         userAddress: recipient,
         ...(targets ? { targets: targets as any } : {}),
       });
@@ -450,13 +451,14 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
       const sdk = new FxSdk({ rpcUrl: leverageSdkRpcUrl(params), chainId: 1 });
       const targets = forkSafeTargets(routingMode);
 
+      // slippage: 5% — fork price divergence tolerance
       const result = await sdk.reducePosition({
         market,
         type: 'long', // reducePosition works for both long and short
         positionId,
         amount: amountIn,
         outputTokenAddress: tokenIn.toLowerCase() as any,
-        slippage: 1,
+        slippage: 5,
         userAddress: recipient,
         isClosePosition: true,
         ...(targets ? { targets: targets as any } : {}),
