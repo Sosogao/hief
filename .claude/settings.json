@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(SDK_DIR=\"/Users/vicky/Documents/GitHub/hief/node_modules/.pnpm/@aladdindao+fx-sdk@1.0.5_typescript@5.9.3_zod@3.25.76/node_modules/@aladdindao/fx-sdk\" grep -B5 -A 30 \"IncreasePositionRequest\" \"$SDK_DIR/dist/index.d.ts\")",
+      "Bash(SDK_DIR=\"/Users/vicky/Documents/GitHub/hief/node_modules/.pnpm/@aladdindao+fx-sdk@1.0.5_typescript@5.9.3_zod@3.25.76/node_modules/@aladdindao/fx-sdk\" grep \"export.*ROUTE_TYPES\\\\|exports.ROUTE_TYPES\" \"$SDK_DIR/dist/index.js\")",
+      "Read(//Users/vicky/Documents/GitHub/hief/$SDK_DIR/dist/**)",
+      "Bash(SDK_DIR=\"/Users/vicky/Documents/GitHub/hief/node_modules/.pnpm/@aladdindao+fx-sdk@1.0.5_typescript@5.9.3_zod@3.25.76/node_modules/@aladdindao/fx-sdk\" ls \"$SDK_DIR/dist/\" grep \"FxRoute\\\\|ROUTE\" \"$SDK_DIR/dist/index.js\")",
+      "Bash(SDK_DIR=\"/Users/vicky/Documents/GitHub/hief/node_modules/.pnpm/@aladdindao+fx-sdk@1.0.5_typescript@5.9.3_zod@3.25.76/node_modules/@aladdindao/fx-sdk\" grep -A5 \"Input token address must be\\\\|inputTokenAddress\\\\|validateToken\" \"$SDK_DIR/dist/index.js\")",
+      "Bash(SDK_DIR=\"/Users/vicky/Documents/GitHub/hief/node_modules/.pnpm/@aladdindao+fx-sdk@1.0.5_typescript@5.9.3_zod@3.25.76/node_modules/@aladdindao/fx-sdk\" grep -B2 -A2 \"eth, stETH, weth\\\\|must be eth\" \"$SDK_DIR/dist/index.js\")",
+      "Bash(SDK_DIR=\"/Users/vicky/Documents/GitHub/hief/node_modules/.pnpm/@aladdindao+fx-sdk@1.0.5_typescript@5.9.3_zod@3.25.76/node_modules/@aladdindao/fx-sdk\" grep -A20 \"^var tokens\" \"$SDK_DIR/dist/index.js\")",
+      "Bash(node -e \":*)",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(gh api:*)",
+      "Bash(python3 -c \"import json,sys; [print\\(f[''''name'''']\\) for f in json.load\\(sys.stdin\\)]\")",
+      "Bash(gh search:*)",
+      "Bash(python3 -c \"import json,sys; repos=json.load\\(sys.stdin\\); [print\\(f{r[''''fullName'''']}: {r.get\\(''''description'''',''''''''\\)} | topics: {r.get\\(''''topics'''',''''''''\\)}\\) for r in repos]\")",
+      "WebFetch(domain:skills.sh)",
+      "Bash(grep -n \"TENDERLY_RPC\\\\|fork.*rpc\\\\|config\" /Users/vicky/Documents/GitHub/hief/packages/policy/src/*.ts)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\(''''scripts'''',{}\\), indent=2\\)\\)\")",
+      "Bash(ls /Users/vicky/Documents/GitHub/hief/*.sh /Users/vicky/Documents/GitHub/hief/*.js)"
+    ]
+  }
+}

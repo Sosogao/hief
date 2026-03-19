@@ -198,12 +198,12 @@
           <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
             <input type="checkbox" id="faucetEth" checked class="accent-green-400 shrink-0">
             <span class="text-xs text-slate-300 flex-1">ETH</span>
-            <input id="faucetEthAmt" type="text" value="0.5" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+            <input id="faucetEthAmt" type="text" value="10" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
           </label>
           <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
             <input type="checkbox" id="faucetUsdc" checked class="accent-blue-400 shrink-0">
             <span class="text-xs text-slate-300 flex-1">USDC</span>
-            <input id="faucetUsdcAmt" type="text" value="1000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+            <input id="faucetUsdcAmt" type="text" value="10000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
           </label>
           <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
             <input type="checkbox" id="faucetWeth" class="accent-cyan-400 shrink-0">
@@ -223,17 +223,17 @@
           <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
             <input type="checkbox" id="faucetWsteth" checked class="accent-indigo-400 shrink-0">
             <span class="text-xs text-slate-300 flex-1">wstETH</span>
-            <input id="faucetWstethAmt" type="text" value="1" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+            <input id="faucetWstethAmt" type="text" value="10" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
           </label>
           <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
-            <input type="checkbox" id="faucetWbtc" class="accent-orange-400 shrink-0">
+            <input type="checkbox" id="faucetWbtc" checked class="accent-orange-400 shrink-0">
             <span class="text-xs text-slate-300 flex-1">WBTC</span>
-            <input id="faucetWbtcAmt" type="text" value="0.05" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+            <input id="faucetWbtcAmt" type="text" value="10" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
           </label>
           <label class="flex items-center gap-2 bg-slate-800/60 rounded-lg px-3 py-2 cursor-pointer hover:bg-slate-800">
-            <input type="checkbox" id="faucetFxusd" class="accent-purple-400 shrink-0">
+            <input type="checkbox" id="faucetFxusd" checked class="accent-purple-400 shrink-0">
             <span class="text-xs text-slate-300 flex-1">fxUSD</span>
-            <input id="faucetFxusdAmt" type="text" value="1000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
+            <input id="faucetFxusdAmt" type="text" value="10000" onclick="event.stopPropagation()" class="w-14 bg-slate-700 border border-slate-600 rounded px-2 py-1 text-xs text-right text-slate-200 focus:border-blue-500 outline-none" />
           </label>
         </div>
         <button onclick="doFaucet()" id="faucetBtn" class="w-full py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors">&#128167; Fund Address</button>
@@ -431,7 +431,7 @@
         <button onclick="setChatInput('deposit 100 USDC to fxSAVE')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">deposit 100 USDC to fxSAVE</button>
         <button onclick="setChatInput('withdraw 50 USDC from fxSAVE')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">withdraw 50 USDC from fxSAVE</button>
         <button onclick="setChatInput('open 2x long wstETH with 0.5 wstETH on f(x)')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">2x long wstETH (f(x))</button>
-        <button onclick="setChatInput('2x short WBTC with 0.01 WBTC on f(x)')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">2x short WBTC (f(x))</button>
+        <button onclick="setChatInput('2x short WBTC with 1000 fxUSD on f(x)')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">2x short WBTC (f(x))</button>
         <button onclick="setChatInput('show me my recent intents')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-indigo-400 hover:text-indigo-300">show recent intents</button>
       </div>
       <!-- Input Area -->
@@ -846,7 +846,8 @@ function renderRecentInputs() {
     row.classList.remove('hidden');
     container.innerHTML = list.map(function(m) {
       var label = m.length > 30 ? m.slice(0, 30) + '…' : m;
-      return '<button onclick="setChatInput(' + JSON.stringify(m) + ')" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-amber-400 hover:text-amber-300" title="' + m.replace(/"/g,'&quot;') + '">' + label + '</button>';
+      var safeAttr = m.replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+      return '<button onclick="setChatInput(this.dataset.msg)" data-msg="' + safeAttr + '" class="text-xs px-3 py-1.5 glass glass-hover rounded-full text-amber-400 hover:text-amber-300" title="' + safeAttr + '">' + label + '</button>';
     }).join('');
   } catch(e) {}
 }
@@ -1704,9 +1705,22 @@ async function saveForkConfig(retryCount) {
         localStorage.setItem('hief_fork_rpc', _currentForkUrl);
         localStorage.setItem('hief_fork_chainid', String(_currentChainId));
       } catch(e) {}
-      statusEl.textContent = '✅ Applied! Fork URL and Chain ID updated (saved as default).';
+      statusEl.textContent = '✅ Applied! Restarting solver service...';
       statusEl.style.color='#4ade80';
-      setTimeout(function() { toggleForkPanel(); loadTestWallets(); }, 1200);
+      // Restart solver-network so any cached provider state is cleared
+      try {
+        await fetch(SOLVER_API+'/v1/solver-network/restart', { method: 'POST' });
+      } catch(e) { /* ignore — process will exit */ }
+      var count = 6;
+      var countdown = setInterval(function() {
+        count--;
+        statusEl.textContent = '⏳ Restarting solver service... (' + count + 's)';
+        if (count <= 0) {
+          clearInterval(countdown);
+          toggleForkPanel();
+          loadTestWallets();
+        }
+      }, 1000);
     } else if (res.status === 503) {
       statusEl.textContent = '⚠️ Solver service is still starting up. Please wait ~10s and click Apply again.';
       statusEl.style.color='#f59e0b';
@@ -2079,7 +2093,7 @@ async function createSmartWallet(walletType) {
 }
 
 function useCreatedWallet(address) {
-  hideCreateWalletPanel();
+  // Don't hide panel — let user see the success card with "Set as Default" button
   setActiveWallet(address);
 }
 

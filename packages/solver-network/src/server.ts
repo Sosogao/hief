@@ -40,8 +40,35 @@ import {
 const PORT = parseInt(process.env.PORT || '3008', 10);
 const BUS_URL = process.env.BUS_URL || 'http://localhost:3001';
 // TENDERLY_RPC_URL is mutable at runtime via POST /v1/solver-network/config
+// and persisted to fork-config.json so it survives server restarts.
 let TENDERLY_RPC_URL = process.env.TENDERLY_RPC_URL || 'https://virtual.mainnet.eu.rpc.tenderly.co/fe86cb9a-2308-4d56-be86-ba6de507aca8'; // HIEFMainnetFork3
 let SETTLEMENT_CHAIN_ID = parseInt(process.env.SETTLEMENT_CHAIN_ID || '99917', 10);
+
+// Fork config persistence — survives server restarts (similar to wallet-config.json)
+const FORK_CONFIG_PATH = path.resolve(__dirname, '../fork-config.json');
+function saveForkConfig() {
+  try {
+    fs.writeFileSync(FORK_CONFIG_PATH, JSON.stringify({ tenderlyRpcUrl: TENDERLY_RPC_URL, settlementChainId: SETTLEMENT_CHAIN_ID }, null, 2), 'utf-8');
+  } catch (e: any) {
+    console.warn(`[ForkConfig] Failed to save fork-config.json: ${e.message}`);
+  }
+}
+{
+  // Apply persisted fork config (overrides env var so UI changes survive restart)
+  try {
+    if (fs.existsSync(FORK_CONFIG_PATH)) {
+      const saved = JSON.parse(fs.readFileSync(FORK_CONFIG_PATH, 'utf-8'));
+      if (saved.tenderlyRpcUrl?.startsWith('http')) {
+        TENDERLY_RPC_URL = saved.tenderlyRpcUrl;
+        console.log(`[ForkConfig] Restored TENDERLY_RPC_URL → ${TENDERLY_RPC_URL}`);
+      }
+      if (saved.settlementChainId) {
+        SETTLEMENT_CHAIN_ID = saved.settlementChainId;
+        console.log(`[ForkConfig] Restored SETTLEMENT_CHAIN_ID → ${SETTLEMENT_CHAIN_ID}`);
+      }
+    }
+  } catch { /* ignore */ }
+}
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || '15000', 10);
 // Set ENABLE_TENDERLY_AUTOFUND=true to allow auto-funding Safe accounts on Tenderly forks (dev/test only)
 const ENABLE_TENDERLY_AUTOFUND = process.env.ENABLE_TENDERLY_AUTOFUND === 'true';
@@ -1974,7 +2001,17 @@ app.post('/v1/solver-network/config', (req: Request, res: Response) => {
     updated.settlementChainId = SETTLEMENT_CHAIN_ID;
     console.log(`[Config] SETTLEMENT_CHAIN_ID updated to: ${SETTLEMENT_CHAIN_ID}`);
   }
+  // Persist so the updated URL survives server restarts
+  if (Object.keys(updated).length > 0) saveForkConfig();
   res.json({ success: true, data: { updated, current: { tenderlyRpcUrl: TENDERLY_RPC_URL, settlementChainId: SETTLEMENT_CHAIN_ID } } });
+});
+
+// POST /v1/solver-network/restart — gracefully exit so process manager (gateway) restarts the service
+// UI calls this after a fork URL change to clear any cached provider state.
+app.post('/v1/solver-network/restart', (_req: Request, res: Response) => {
+  console.log('[Config] Restart requested — exiting process for gateway to restart');
+  res.json({ success: true, message: 'Restarting solver-network service...' });
+  setTimeout(() => process.exit(0), 200);
 });
 
 // ─── Test Wallets API ──────────────────────────────────────────────────────────────────────────────────────
