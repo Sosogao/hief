@@ -20,12 +20,14 @@ portfolioRouter.get('/:address', async (req: Request, res: Response) => {
   }
 
   const chain  = (req.query.chain as string) || 'eth';
-  const apiKey = process.env.DEBANK_API_KEY;
+  // Accept key from request header (user-supplied) or env var
+  const apiKey = (req.headers['x-debank-key'] as string) || process.env.DEBANK_API_KEY;
   if (!apiKey) {
     return res.json({ success: false, error: 'DEBANK_API_KEY not configured', data: null });
   }
 
-  const cacheKey = `${address.toLowerCase()}:${chain}`;
+  // Cache key includes a hash of the api key so different keys don't share cache
+  const cacheKey = `${address.toLowerCase()}:${chain}:${apiKey.slice(-8)}`;
   const cached   = _cache.get(cacheKey);
   if (cached && Date.now() - cached.ts < CACHE_TTL) {
     return res.json({ success: true, data: cached.data, cached: true });

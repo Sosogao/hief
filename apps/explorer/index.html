@@ -291,7 +291,18 @@
             <button class="chain-btn" onclick="setPortfolioChain('op',this)">Optimism</button>
           </div>
           <button onclick="loadPortfolio()" class="text-xs px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-slate-200 transition-colors">⟳ Refresh</button>
+          <button onclick="toggleDebankKeyPanel()" class="text-xs px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-slate-200 transition-colors" title="Set DeBank API Key">🔑 API Key</button>
         </div>
+      </div>
+      <!-- DeBank API Key input (hidden by default) -->
+      <div id="debankKeyPanel" class="hidden mb-3 p-3 rounded-xl glass border border-indigo-500/20">
+        <div class="flex items-center gap-2">
+          <span class="text-xs text-slate-400 whitespace-nowrap">DeBank Access Key</span>
+          <input id="debankKeyInput" type="password" placeholder="Paste your DeBank Access Key here..." class="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-mono focus:border-indigo-500 outline-none" />
+          <button onclick="saveDebankKey()" class="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white whitespace-nowrap transition-colors">Save &amp; Load</button>
+          <button onclick="clearDebankKey()" class="text-xs px-2 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-400 transition-colors" title="Clear saved key">✕</button>
+        </div>
+        <div class="text-xs text-slate-500 mt-1.5">Key is stored in browser localStorage only — never sent to any server except DeBank. Get yours at <span class="text-indigo-400">cloud.debank.com</span></div>
       </div>
       <div id="portfolioContent" class="space-y-3">
         <!-- filled by loadPortfolio() -->
@@ -1952,6 +1963,30 @@ function selectTestWallet(address) {
 
 var _portfolioChain = 'eth';
 
+function toggleDebankKeyPanel() {
+  var panel = document.getElementById('debankKeyPanel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) {
+    var saved = localStorage.getItem('hief_debank_key');
+    if (saved) document.getElementById('debankKeyInput').value = saved;
+    document.getElementById('debankKeyInput').focus();
+  }
+}
+
+function saveDebankKey() {
+  var key = document.getElementById('debankKeyInput').value.trim();
+  if (!key) return;
+  localStorage.setItem('hief_debank_key', key);
+  document.getElementById('debankKeyPanel').classList.add('hidden');
+  loadPortfolio();
+}
+
+function clearDebankKey() {
+  localStorage.removeItem('hief_debank_key');
+  document.getElementById('debankKeyInput').value = '';
+  document.getElementById('debankKeyPanel').classList.add('hidden');
+}
+
 function setPortfolioChain(chain, btn) {
   _portfolioChain = chain;
   document.querySelectorAll('#portfolioChainBtns .chain-btn').forEach(function(b) { b.classList.remove('active'); });
@@ -1971,14 +2006,18 @@ async function loadPortfolio(address) {
   content.innerHTML = '<div class="text-xs text-slate-500 py-4 text-center">Loading positions...</div>';
 
   try {
-    var res  = await fetch(EXPLORER_API + '/v1/explorer/portfolio/' + address + '?chain=' + _portfolioChain);
+    var debankKey = localStorage.getItem('hief_debank_key') || '';
+    var fetchOpts = debankKey ? { headers: { 'x-debank-key': debankKey } } : {};
+    var res  = await fetch(EXPLORER_API + '/v1/explorer/portfolio/' + address + '?chain=' + _portfolioChain, fetchOpts);
     var json = await res.json();
     if (!json.success) {
+      var isNotConfigured = json.error === 'DEBANK_API_KEY not configured';
       content.innerHTML = '<div class="text-xs text-slate-500 py-3 text-center">'
-        + (json.error === 'DEBANK_API_KEY not configured'
-            ? '⚙️ DeBank API key not configured (add DEBANK_API_KEY env var on server)'
+        + (isNotConfigured
+            ? '🔑 DeBank API key required — click <b style="color:#a5b4fc;cursor:pointer;" onclick="toggleDebankKeyPanel()">API Key</b> to set it'
             : '⚠️ ' + (json.error || 'Failed to load positions'))
         + '</div>';
+      if (isNotConfigured) document.getElementById('debankKeyPanel').classList.remove('hidden');
       return;
     }
     renderPortfolio(json.data);
