@@ -342,7 +342,8 @@ export class ConversationEngine {
   ): string {
     const uiHints = (intent.meta?.uiHints ?? {}) as Record<string, unknown>;
     const protocol = (uiHints.protocol as string) ?? 'auto';
-    const leverageTag = (intent.meta?.tags?.[0] as string) || '';
+    const intentTag = (intent.meta?.tags?.[0] as string) || '';
+    const leverageTag = intentTag;
     const isLeverage = protocol === 'fx' && (
       leverageTag === 'LEVERAGE_LONG' ||
       leverageTag === 'LEVERAGE_SHORT' ||
@@ -350,9 +351,13 @@ export class ConversationEngine {
     );
     const leverageMult = uiHints.leverage ? `${uiHints.leverage}x ` : '';
     const leverageMarket = (uiHints.market as string) ?? '';
-    const isFxSave  = !isLeverage && (protocol === 'fx' || outputSymbol === 'fxSAVE');
-    const isDeposit = !isFxSave && !isLeverage && (protocol === 'aave' || outputSymbol.startsWith('a'));
-    const isLido    = protocol === 'lido' || outputSymbol === 'stETH';
+    const isFxSave   = !isLeverage && (protocol === 'fx' || outputSymbol === 'fxSAVE');
+    const isAave     = !isFxSave && !isLeverage && (protocol === 'aave' || outputSymbol.startsWith('a'));
+    const aaveAction = intentTag === 'WITHDRAW' ? 'Withdraw'
+                     : intentTag === 'BORROW'   ? 'Borrow'
+                     : intentTag === 'REPAY'    ? 'Repay'
+                     : 'Deposit';
+    const isLido     = protocol === 'lido' || outputSymbol === 'stETH';
 
     if (isLeverage) {
       const action = leverageTag === 'LEVERAGE_LONG' ? 'Long' : leverageTag === 'LEVERAGE_SHORT' ? 'Short' : 'Close';
@@ -378,12 +383,19 @@ Reply **yes** to confirm or **no** to cancel.`;
 Reply **yes** to confirm or **no** to cancel.`;
     }
 
-    if (isDeposit) {
+    if (isAave) {
+      const aaveDesc = aaveAction === 'Borrow'
+        ? '💸 Borrow against your collateral — variable rate'
+        : aaveAction === 'Repay'
+        ? '✅ Repay borrowed position — reduces debt'
+        : aaveAction === 'Withdraw'
+        ? '💰 Withdraw supplied assets'
+        : '📈 Earn yield — no slippage, 1:1 ratio';
       return `📋 **Transaction Summary**
 
-💰 Deposit **${inputAmountHuman} ${inputSymbol}** → **${outputSymbol}** (Aave v3)
+💰 ${aaveAction} **${inputAmountHuman} ${inputSymbol}** → **${outputSymbol}** (Aave v3)
 🌐 Network: ${chain}
-📈 Earn yield — no slippage, 1:1 ratio
+${aaveDesc}
 🏦 Protocol: Aave v3 (lending & borrowing)
 
 Reply **yes** to confirm or **no** to cancel.`;
@@ -424,7 +436,12 @@ Reply **yes** to confirm or **no** to cancel.`;
     );
     const leverageMult2 = uiHints2.leverage ? `${uiHints2.leverage}x ` : '';
     const isFxSave2  = !isLeverage2 && (protocol === 'fx' || outputSymbol === 'fxSAVE');
-    const isDeposit = !isFxSave2 && !isLeverage2 && (protocol === 'aave' || outputSymbol.startsWith('a'));
+    const intentTag2 = (intent.meta?.tags?.[0] as string) || '';
+    const isAave2    = !isFxSave2 && !isLeverage2 && (protocol === 'aave' || outputSymbol.startsWith('a'));
+    const aaveAction2 = intentTag2 === 'WITHDRAW' ? 'Withdraw'
+                      : intentTag2 === 'BORROW'   ? 'Borrow'
+                      : intentTag2 === 'REPAY'    ? 'Repay'
+                      : 'Deposit';
 
     if (isLeverage2) {
       const action2 = leverageTag2 === 'LEVERAGE_LONG' ? 'Long' : leverageTag2 === 'LEVERAGE_SHORT' ? 'Short' : 'Close';
@@ -450,13 +467,17 @@ Your intent has been submitted:
 You'll receive a transaction to sign shortly.`;
     }
 
-    if (isDeposit) {
+    if (isAave2) {
+      const aaveStatus2 = aaveAction2 === 'Deposit' ? 'Preparing Aave supply transaction'
+                        : aaveAction2 === 'Withdraw' ? 'Preparing Aave withdrawal'
+                        : aaveAction2 === 'Borrow'   ? 'Preparing Aave borrow transaction'
+                        : 'Preparing Aave repay transaction';
       return `✅ **Intent confirmed!**
 
-Your deposit intent has been submitted:
+Your ${aaveAction2.toLowerCase()} intent has been submitted:
 - **Intent ID**: \`${intent.intentId.slice(0, 16)}...\`
-- **Action**: Deposit ${inputAmountHuman} ${inputSymbol} → ${outputSymbol} (Aave v3)
-- **Status**: Preparing Aave supply transaction...
+- **Action**: ${aaveAction2} **${inputAmountHuman} ${inputSymbol}** → **${outputSymbol}** (Aave v3)
+- **Status**: ${aaveStatus2}...
 
 You'll receive a transaction to sign shortly.`;
     }
