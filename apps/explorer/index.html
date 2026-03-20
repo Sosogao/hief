@@ -86,6 +86,18 @@
     .btn-fork-save:hover { background:rgba(99,102,241,0.5); }
     .btn-fork-fund { background:rgba(74,222,128,0.15); border:1px solid rgba(74,222,128,0.3); color:#4ade80; border-radius:6px; padding:5px 12px; font-size:11px; cursor:pointer; }
     .btn-fork-fund:hover { background:rgba(74,222,128,0.25); }
+    /* Portfolio Panel */
+    .portfolio-protocol-card { background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.07); border-radius:12px; padding:14px 16px; }
+    .portfolio-position-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; border-bottom:1px solid rgba(255,255,255,0.04); font-size:12px; }
+    .portfolio-position-row:last-child { border-bottom:none; }
+    .portfolio-token-pill { display:inline-flex; align-items:center; gap:5px; padding:3px 8px; border-radius:6px; font-size:11px; font-weight:600; background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.08); }
+    .portfolio-supply  { color:#4ade80; }
+    .portfolio-borrow  { color:#f87171; }
+    .portfolio-reward  { color:#fbbf24; }
+    .portfolio-other   { color:#94a3b8; }
+    .chain-btn { padding:3px 10px; border-radius:6px; font-size:11px; cursor:pointer; border:1px solid rgba(255,255,255,0.1); background:rgba(255,255,255,0.04); color:#64748b; transition:all 0.15s; }
+    .chain-btn.active  { background:rgba(99,102,241,0.25); border-color:rgba(99,102,241,0.5); color:#a5b4fc; }
+    .chain-btn:hover   { background:rgba(255,255,255,0.08); color:#94a3b8; }
   </style>
 </head>
 <body class="min-h-screen">
@@ -261,6 +273,28 @@
           </div>
         </div>
         <div id="createWalletStatus" class="text-xs mt-3 text-slate-400 hidden"></div>
+      </div>
+    </div>
+
+    <!-- ─── Portfolio / DeFi Positions Panel ─────────────────────────────── -->
+    <div id="portfolioSection" class="mt-6 hidden">
+      <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <h2 class="text-sm font-semibold text-slate-300">📊 DeFi Positions</h2>
+          <span id="portfolioAddrLabel" class="text-xs text-slate-500 font-mono"></span>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex gap-1" id="portfolioChainBtns">
+            <button class="chain-btn active" onclick="setPortfolioChain('eth',this)">Ethereum</button>
+            <button class="chain-btn" onclick="setPortfolioChain('base',this)">Base</button>
+            <button class="chain-btn" onclick="setPortfolioChain('arb',this)">Arbitrum</button>
+            <button class="chain-btn" onclick="setPortfolioChain('op',this)">Optimism</button>
+          </div>
+          <button onclick="loadPortfolio()" class="text-xs px-2 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-400 hover:text-slate-200 transition-colors">⟳ Refresh</button>
+        </div>
+      </div>
+      <div id="portfolioContent" class="space-y-3">
+        <!-- filled by loadPortfolio() -->
       </div>
     </div>
 
@@ -1906,11 +1940,127 @@ function setActiveWallet(address, skipLookup) {
     if (c.innerHTML && c.innerHTML.indexOf(address.slice(0,10)) !== -1) c.classList.add('selected');
   });
   if (!skipLookup) lookupAddress();
+  loadPortfolio(address);
 }
 
 function selectTestWallet(address) {
   setActiveWallet(address);
   document.getElementById('addressInput').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// ─── Portfolio / DeFi Positions ───────────────────────────────────────────────
+
+var _portfolioChain = 'eth';
+
+function setPortfolioChain(chain, btn) {
+  _portfolioChain = chain;
+  document.querySelectorAll('#portfolioChainBtns .chain-btn').forEach(function(b) { b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  loadPortfolio();
+}
+
+async function loadPortfolio(address) {
+  address = address || document.getElementById('chatWallet').value.trim() || document.getElementById('addressInput').value.trim();
+  if (!address || !/^0x[0-9a-fA-F]{40}$/i.test(address)) return;
+
+  var section = document.getElementById('portfolioSection');
+  var content = document.getElementById('portfolioContent');
+  var label   = document.getElementById('portfolioAddrLabel');
+  section.classList.remove('hidden');
+  label.textContent = address.slice(0,10) + '...' + address.slice(-6);
+  content.innerHTML = '<div class="text-xs text-slate-500 py-4 text-center">Loading positions...</div>';
+
+  try {
+    var res  = await fetch(EXPLORER_API + '/v1/explorer/portfolio/' + address + '?chain=' + _portfolioChain);
+    var json = await res.json();
+    if (!json.success) {
+      content.innerHTML = '<div class="text-xs text-slate-500 py-3 text-center">'
+        + (json.error === 'DEBANK_API_KEY not configured'
+            ? '⚙️ DeBank API key not configured (add DEBANK_API_KEY env var on server)'
+            : '⚠️ ' + (json.error || 'Failed to load positions'))
+        + '</div>';
+      return;
+    }
+    renderPortfolio(json.data);
+  } catch(e) {
+    content.innerHTML = '<div class="text-xs text-red-400 py-3 text-center">❌ Request failed: ' + e.message + '</div>';
+  }
+}
+
+function renderPortfolio(data) {
+  var content   = document.getElementById('portfolioContent');
+  var protocols = (data.protocols || []).filter(function(p) { return p.net_usd_value !== 0; });
+  var tokens    = (data.tokens    || []).filter(function(t) { return t.amount > 0 && !t.is_core; });
+  var html = '';
+
+  if (protocols.length === 0 && tokens.length === 0) {
+    html = '<div class="text-xs text-slate-500 py-4 text-center">No positions found on this chain.</div>';
+    content.innerHTML = html;
+    return;
+  }
+
+  protocols.forEach(function(proto) {
+    var netVal   = proto.net_usd_value || 0;
+    var netColor = netVal >= 0 ? '#4ade80' : '#f87171';
+    var items    = proto.portfolio_item_list || [];
+    html += '<div class="portfolio-protocol-card">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">';
+    html += '<div style="display:flex;align-items:center;gap:8px;">';
+    if (proto.logo_url) html += '<img src="' + proto.logo_url + '" style="width:20px;height:20px;border-radius:50%;object-fit:cover;" onerror="this.style.display=\'none\'">';
+    html += '<span style="font-size:13px;font-weight:700;color:#f1f5f9;">' + (proto.name || proto.id) + '</span>';
+    html += '</div><span style="font-size:12px;font-weight:600;color:' + netColor + ';">$' + Math.abs(netVal).toLocaleString('en-US',{maximumFractionDigits:2}) + '</span></div>';
+
+    items.forEach(function(item) {
+      var itemName  = item.name || 'Position';
+      var isSupply  = /deposit|supply|lend|collateral/i.test(itemName);
+      var isBorrow  = /borrow|debt/i.test(itemName);
+      var isReward  = /reward|claim/i.test(itemName);
+      var labelCls  = isSupply ? 'portfolio-supply' : isBorrow ? 'portfolio-borrow' : isReward ? 'portfolio-reward' : 'portfolio-other';
+      html += '<div class="portfolio-position-row"><span style="font-size:11px;font-weight:600;" class="' + labelCls + '">' + itemName + '</span>';
+      html += '<div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">';
+
+      function renderTokens(list, cls) {
+        (list || []).forEach(function(t) {
+          html += '<span class="portfolio-token-pill ' + cls + '">'
+            + (t.logo_url ? '<img src="' + t.logo_url + '" style="width:12px;height:12px;border-radius:50%;" onerror="this.style.display=\'none\'">' : '')
+            + formatPortfolioAmount(t.amount) + ' ' + t.symbol
+            + (t.price ? '<span style="color:#64748b;font-weight:400;margin-left:2px;">$' + (t.amount * t.price).toLocaleString('en-US',{maximumFractionDigits:2}) + '</span>' : '')
+            + '</span>';
+        });
+      }
+      renderTokens((item.detail && item.detail.supply_token_list), 'portfolio-supply');
+      renderTokens((item.detail && item.detail.borrow_token_list), 'portfolio-borrow');
+      renderTokens((item.detail && item.detail.reward_token_list), 'portfolio-reward');
+      renderTokens((item.detail && item.detail.token_list),        labelCls);
+      html += '</div></div>';
+    });
+    if (items.length === 0) html += '<div style="font-size:11px;color:#64748b;">No sub-positions</div>';
+    html += '</div>';
+  });
+
+  if (tokens.length > 0) {
+    html += '<div class="portfolio-protocol-card"><div style="font-size:13px;font-weight:700;color:#f1f5f9;margin-bottom:10px;">💰 Wallet Tokens</div>';
+    tokens.forEach(function(t) {
+      var usd = t.amount * (t.price || 0);
+      html += '<div class="portfolio-position-row">';
+      html += '<div style="display:flex;align-items:center;gap:6px;">'
+        + (t.logo_url ? '<img src="' + t.logo_url + '" style="width:14px;height:14px;border-radius:50%;" onerror="this.style.display=\'none\'">' : '')
+        + '<span style="color:#e2e8f0;font-size:12px;">' + t.symbol + '</span></div>';
+      html += '<span style="color:#94a3b8;font-size:11px;">'
+        + formatPortfolioAmount(t.amount) + ' <span style="color:#64748b;">($' + usd.toLocaleString('en-US',{maximumFractionDigits:2}) + ')</span></span>';
+      html += '</div>';
+    });
+    html += '</div>';
+  }
+
+  content.innerHTML = html;
+}
+
+function formatPortfolioAmount(n) {
+  if (!n) return '0';
+  if (n >= 1000) return n.toLocaleString('en-US',{maximumFractionDigits:2});
+  if (n >= 1)    return n.toLocaleString('en-US',{maximumFractionDigits:4});
+  return n.toLocaleString('en-US',{maximumFractionDigits:6});
 }
 
 // ─── Faucet ────────────────────────────────────────────────────────────────────
