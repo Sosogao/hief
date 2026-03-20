@@ -15,6 +15,7 @@ import { intentsRouter } from './routes/intents';
 import { addressRouter } from './routes/address';
 import { activityRouter } from './routes/activity';
 import { leaderboardRouter } from './routes/leaderboard';
+import { portfolioRouter } from './routes/portfolio';
 
 const app = express();
 const PORT = parseInt(process.env.EXPLORER_API_PORT || process.env.PORT || '3006', 10);
@@ -53,6 +54,7 @@ app.use('/v1/explorer/intents', intentsRouter);
 app.use('/v1/explorer/address', addressRouter);
 app.use('/v1/explorer/activity', activityRouter);
 app.use('/v1/explorer/leaderboard', leaderboardRouter);
+app.use('/v1/explorer/portfolio',  portfolioRouter);
 
 // ─── Reputation proxy (for backward compat with existing frontend) ────────────
 // Forward /v1/reputation/* to the Reputation API
