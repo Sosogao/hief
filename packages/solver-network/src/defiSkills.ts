@@ -14,7 +14,7 @@ import { ethers } from 'ethers';
 
 // ─── Common Types ─────────────────────────────────────────────────────────────
 
-export type DefiSkillType = 'DEPOSIT' | 'WITHDRAW' | 'STAKE' | 'UNSTAKE' | 'PROVIDE_LIQUIDITY' | 'LEVERAGE_LONG' | 'LEVERAGE_SHORT' | 'LEVERAGE_CLOSE';
+export type DefiSkillType = 'DEPOSIT' | 'WITHDRAW' | 'BORROW' | 'REPAY' | 'STAKE' | 'UNSTAKE' | 'PROVIDE_LIQUIDITY' | 'LEVERAGE_LONG' | 'LEVERAGE_SHORT' | 'LEVERAGE_CLOSE';
 
 /** The output of adapter.quote() — protocol-agnostic execution spec */
 export interface DefiSkillQuote {
@@ -221,20 +221,32 @@ const ATOKEN_TO_UNDERLYING: Record<string, string> = Object.fromEntries(
 const AAVE_POOL_ABI = [
   'function supply(address asset, uint256 amount, address onBehalfOf, uint16 referralCode)',
   'function withdraw(address asset, uint256 amount, address to) returns (uint256)',
+  'function borrow(address asset, uint256 amount, uint256 interestRateMode, uint16 referralCode, address onBehalfOf)',
+  'function repay(address asset, uint256 amount, uint256 interestRateMode, address onBehalfOf) returns (uint256)',
   'function getReserveData(address asset) view returns (tuple(uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt))',
 ];
 
 const WETH_GATEWAY_ABI = [
   'function depositETH(address pool, address onBehalfOf, uint16 referralCode) payable',
   'function withdrawETH(address pool, uint256 amount, address to)',
+  'function repayETH(address pool, uint256 amount, uint256 rateMode, address onBehalfOf) payable',
 ];
+
+/** Variable debt token addresses for REPAY — needed for approve target check */
+const AAVE_VARIABLE_DEBT: Record<string, string> = {
+  [WETH_ADDR.toLowerCase()]:                     '0xeA51d7853EEFb32b6ee06b1C12E6dcCA88Be0fFE',
+  '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48':  '0x72E95b8931767C79bA4EeE721354d6E99a61D004', // USDC
+  '0xdac17f958d2ee523a2206206994597c13d831ec7':  '0x6df1C1E379bC5a00a7b4C6e67A203333772f45A8', // USDT
+  '0x6b175474e89094c44da98b954eedeac495271d0f':  '0xcF8d0c70c850859266f5C338b38F9D663181C314', // DAI
+  '0x2260fac5e5542a773aa44fbcfedf7c193bc2c599':  '0x40aAbEf1aa8f0eEc637E0E7d92fbfFB2F26A8b7b', // WBTC
+};
 
 export class AaveV3Adapter implements DefiProtocolAdapter {
   readonly id = 'aave-v3';
   readonly name = 'Aave v3';
   readonly description = 'Aave v3 lending protocol — earn yield by supplying assets, or withdraw your deposits.';
   readonly supportedChains = [1, 8453, 31337];
-  readonly supportedSkills: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW'];
+  readonly supportedSkills: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW', 'BORROW', 'REPAY'];
   readonly faucetTokens: FaucetTokenDef[] = [
     { symbol: 'USDC', address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', decimals: 6,  defaultAmount: '1000' },
     { symbol: 'USDT', address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', decimals: 6,  defaultAmount: '1000' },
@@ -244,19 +256,18 @@ export class AaveV3Adapter implements DefiProtocolAdapter {
 
   supportsToken(token: string, skill: DefiSkillType): boolean {
     const key = token.toLowerCase();
-    if (skill === 'DEPOSIT') {
-      return key === ETH_ALIAS.toLowerCase() || key in AAVE_ATOKENS;
-    }
-    if (skill === 'WITHDRAW') {
-      // Accept underlying token address or aToken address
-      return key in AAVE_ATOKENS || key in ATOKEN_TO_UNDERLYING;
-    }
+    if (skill === 'DEPOSIT') return key === ETH_ALIAS.toLowerCase() || key in AAVE_ATOKENS;
+    if (skill === 'WITHDRAW') return key in AAVE_ATOKENS || key in ATOKEN_TO_UNDERLYING;
+    if (skill === 'BORROW')   return key === ETH_ALIAS.toLowerCase() || key in AAVE_ATOKENS;
+    if (skill === 'REPAY')    return key === ETH_ALIAS.toLowerCase() || key in AAVE_ATOKENS;
     return false;
   }
 
   async quote(params: QuoteParams): Promise<DefiSkillQuote | null> {
     if (params.skill === 'DEPOSIT') return this._quoteDeposit(params);
     if (params.skill === 'WITHDRAW') return this._quoteWithdraw(params);
+    if (params.skill === 'BORROW')  return this._quoteBorrow(params);
+    if (params.skill === 'REPAY')   return this._quoteRepay(params);
     return null;
   }
 
@@ -354,6 +365,81 @@ export class AaveV3Adapter implements DefiProtocolAdapter {
     }
   }
 
+  private async _quoteBorrow({ tokenIn, amountIn, recipient, rpcUrl }: QuoteParams): Promise<DefiSkillQuote | null> {
+    try {
+      const isEth = tokenIn.toLowerCase() === ETH_ALIAS.toLowerCase();
+      const assetKey = isEth ? WETH_ADDR.toLowerCase() : tokenIn.toLowerCase();
+      const entry = AAVE_ATOKENS[assetKey];
+      if (!entry) return null;
+
+      const borrowRateApy = await this._fetchVariableBorrowRate(entry.underlying, rpcUrl);
+      const iface = new ethers.Interface(AAVE_POOL_ABI);
+      // interestRateMode=2 (variable); stable rate deprecated in Aave v3.1
+      const calldata = iface.encodeFunctionData('borrow', [entry.underlying, amountIn, 2, 0, recipient]);
+      const underlyingSymbol = entry.symbol.replace(/^a/, '');
+
+      return {
+        protocol: this.name, adapterId: this.id, skill: 'BORROW',
+        tokenIn: isEth ? ETH_ALIAS : entry.underlying,
+        tokenOut: isEth ? ETH_ALIAS : entry.underlying,
+        tokenOutSymbol: underlyingSymbol,
+        amountIn, amountOut: amountIn,
+        apy: -borrowRateApy,   // negative = cost to borrower
+        contractTo: AAVE_V3_POOL, calldata, value: 0n,
+        needsApproval: false, approveTarget: '',
+        route: `Aave v3 Borrow ${underlyingSymbol} (variable ${borrowRateApy.toFixed(2)}% APY)`,
+        priceImpactBps: 0,
+      };
+    } catch (e) {
+      console.warn('[AaveV3] borrow quote error:', (e as Error).message?.slice(0, 120));
+      return null;
+    }
+  }
+
+  private async _quoteRepay({ tokenIn, amountIn, recipient, rpcUrl }: QuoteParams): Promise<DefiSkillQuote | null> {
+    try {
+      const isEth = tokenIn.toLowerCase() === ETH_ALIAS.toLowerCase();
+      const assetKey = isEth ? WETH_ADDR.toLowerCase() : tokenIn.toLowerCase();
+      const entry = AAVE_ATOKENS[assetKey];
+      if (!entry) return null;
+
+      const underlyingSymbol = entry.symbol.replace(/^a/, '');
+      let contractTo: string, calldata: string, value: bigint, needsApproval: boolean, approveTarget: string;
+
+      if (isEth) {
+        // repayETH sends ETH directly — no ERC-20 approve needed
+        const iface = new ethers.Interface(WETH_GATEWAY_ABI);
+        calldata = iface.encodeFunctionData('repayETH', [AAVE_V3_POOL, amountIn, 2, recipient]);
+        contractTo = AAVE_WETH_GATEWAY;
+        value = amountIn;
+        needsApproval = false;
+        approveTarget = '';
+      } else {
+        // Pool.repay: caller must approve Pool to pull the underlying token
+        const iface = new ethers.Interface(AAVE_POOL_ABI);
+        calldata = iface.encodeFunctionData('repay', [entry.underlying, amountIn, 2, recipient]);
+        contractTo = AAVE_V3_POOL;
+        value = 0n;
+        needsApproval = true;
+        approveTarget = AAVE_V3_POOL;
+      }
+
+      return {
+        protocol: this.name, adapterId: this.id, skill: 'REPAY',
+        tokenIn: isEth ? ETH_ALIAS : entry.underlying,
+        tokenOut: isEth ? ETH_ALIAS : entry.underlying,
+        tokenOutSymbol: underlyingSymbol,
+        amountIn, amountOut: amountIn, apy: 0,
+        contractTo, calldata, value, needsApproval, approveTarget,
+        route: `Aave v3 Repay ${underlyingSymbol} (variable debt)`,
+        priceImpactBps: 0,
+      };
+    } catch (e) {
+      console.warn('[AaveV3] repay quote error:', (e as Error).message?.slice(0, 120));
+      return null;
+    }
+  }
+
   buildCalls(quote: DefiSkillQuote): CallData[] {
     const calls: CallData[] = [];
     if (quote.needsApproval) {
@@ -374,6 +460,17 @@ export class AaveV3Adapter implements DefiProtocolAdapter {
       const pool = new ethers.Contract(AAVE_V3_POOL, AAVE_POOL_ABI, provider);
       const reserve = await pool.getReserveData(assetAddr);
       return Number(BigInt(reserve.currentLiquidityRate)) / 1e25;
+    } catch {
+      return 0;
+    }
+  }
+
+  private async _fetchVariableBorrowRate(assetAddr: string, rpcUrl: string): Promise<number> {
+    try {
+      const provider = new ethers.JsonRpcProvider(rpcUrl);
+      const pool = new ethers.Contract(AAVE_V3_POOL, AAVE_POOL_ABI, provider);
+      const reserve = await pool.getReserveData(assetAddr);
+      return Number(BigInt(reserve.currentVariableBorrowRate)) / 1e25;
     } catch {
       return 0;
     }

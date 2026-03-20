@@ -11,6 +11,8 @@ export type IntentType =
   | 'SWAP'
   | 'DEPOSIT'
   | 'WITHDRAW'
+  | 'BORROW'
+  | 'REPAY'
   | 'BRIDGE'
   | 'PROVIDE_LIQUIDITY'
   | 'REMOVE_LIQUIDITY'
@@ -53,7 +55,7 @@ export interface ResolvedIntent {
 
 const ParseResultSchema = z.object({
   intentType: z.enum([
-    'SWAP', 'DEPOSIT', 'WITHDRAW',
+    'SWAP', 'DEPOSIT', 'WITHDRAW', 'BORROW', 'REPAY',
     'BRIDGE', 'PROVIDE_LIQUIDITY', 'REMOVE_LIQUIDITY',
     'STAKE', 'UNSTAKE',
     'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE',
@@ -150,7 +152,7 @@ export class IntentParser {
     }
 
     // Supported intent types
-    const SUPPORTED_TYPES = new Set(['SWAP', 'DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE', 'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE']);
+    const SUPPORTED_TYPES = new Set(['SWAP', 'DEPOSIT', 'WITHDRAW', 'BORROW', 'REPAY', 'STAKE', 'UNSTAKE', 'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE']);
     if (!SUPPORTED_TYPES.has(parseResult.intentType)) {
       resolveErrors.push(`Intent type "${parseResult.intentType}" is not yet supported. Supported: SWAP, DEPOSIT, WITHDRAW (Aave), STAKE, UNSTAKE (Lido).`);
       return { parseResult, resolveErrors };

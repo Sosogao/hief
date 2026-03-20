@@ -222,7 +222,7 @@ function getIntentSkillType(intent: any): DefiSkillType | null {
   const type = intent.meta?.intentType
     || intent.intentType
     || (intent.meta?.tags?.[0] as string | undefined);
-  const DEFI_SKILLS: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE', 'PROVIDE_LIQUIDITY', 'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE'];
+  const DEFI_SKILLS: DefiSkillType[] = ['DEPOSIT', 'WITHDRAW', 'BORROW', 'REPAY', 'STAKE', 'UNSTAKE', 'PROVIDE_LIQUIDITY', 'LEVERAGE_LONG', 'LEVERAGE_SHORT', 'LEVERAGE_CLOSE'];
   return DEFI_SKILLS.includes(type) ? (type as DefiSkillType) : null;
 }
 

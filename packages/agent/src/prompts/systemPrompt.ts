@@ -12,6 +12,8 @@ Extract DeFi intent parameters from user messages. You MUST return valid JSON on
 - SWAP: Exchange one token for another (e.g., "swap 100 USDC for ETH")
 - DEPOSIT: Deposit/supply tokens into a lending/yield protocol (e.g., "deposit 100 USDC to Aave", "supply 0.1 ETH into Aave", "存100 USDC 到 Aave")
 - WITHDRAW: Withdraw/redeem tokens from a lending/yield protocol (e.g., "withdraw my USDC from Aave", "从Aave取回USDC")
+- BORROW: Borrow tokens from a lending protocol against existing collateral (e.g., "borrow 100 USDC from Aave", "从Aave借100 USDC")
+- REPAY: Repay borrowed tokens to a lending protocol (e.g., "repay 100 USDC to Aave", "还款100 USDC 到 Aave", "repay my Aave loan")
 - BRIDGE: Move tokens across chains (e.g., "bridge 0.5 ETH to Arbitrum")
 - PROVIDE_LIQUIDITY: Add liquidity to a pool (e.g., "add 100 USDC and 0.05 ETH to Uniswap")
 - REMOVE_LIQUIDITY: Remove liquidity from a pool
@@ -27,7 +29,7 @@ Always respond with this exact JSON structure:
 
 \`\`\`json
 {
-  "intentType": "SWAP | DEPOSIT | WITHDRAW | BRIDGE | PROVIDE_LIQUIDITY | REMOVE_LIQUIDITY | STAKE | UNSTAKE | UNKNOWN",
+  "intentType": "SWAP | DEPOSIT | WITHDRAW | BORROW | REPAY | BRIDGE | PROVIDE_LIQUIDITY | REMOVE_LIQUIDITY | STAKE | UNSTAKE | UNKNOWN",
   "confidence": 0.0-1.0,
   "params": {
     "inputToken": "symbol or address (string, or null if unknown)",
@@ -53,7 +55,9 @@ Always respond with this exact JSON structure:
 3. If the output token is missing for a SWAP, add "outputToken" to missingFields.
 3a. For DEPOSIT: outputToken is the receipt token (e.g. "aUSDC" for Aave), set protocol="aave". outputToken may be null — the solver will resolve the aToken address.
 3b. For WITHDRAW: inputToken is the underlying asset to withdraw (e.g. "USDC"), outputToken is the same token (user gets their asset back). Set protocol="aave" by default.
-3c. For DEPOSIT/WITHDRAW, set protocol to the mentioned protocol ("aave", "compound", "fx", "fxsave", etc.) or "aave" by default.
+3b2. For BORROW: inputToken is the asset to borrow (e.g. "USDC"), outputToken = same. Set protocol="aave". No approval needed — user must have collateral deposited first.
+3b3. For REPAY: inputToken is the asset to repay (e.g. "USDC"), outputToken = same. Set protocol="aave". If user says "repay all" or "全部还款", set inputAmount="ALL".
+3c. For DEPOSIT/WITHDRAW/BORROW/REPAY, set protocol to the mentioned protocol ("aave", etc.) or "aave" by default.
     Supported protocols: Aave v3 (DEPOSIT/WITHDRAW USDC/ETH/WBTC/DAI/USDT), f(x) Protocol fxSAVE (DEPOSIT/WITHDRAW USDC).
     For f(x) / fxSAVE: set protocol="fx". outputToken for DEPOSIT = "fxSAVE". outputToken for WITHDRAW = "USDC".
     Recognize: "fx protocol", "fxSAVE", "f(x)", "AladdinDAO fx", "deposit USDC to fxSAVE", "withdraw from fxSAVE".
