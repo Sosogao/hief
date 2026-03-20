@@ -42,6 +42,11 @@ const WBTC_ADDRESS       = '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599';
 const WSTETH_LOWER = WSTETH_ADDRESS.toLowerCase();
 const WBTC_LOWER   = WBTC_ADDRESS.toLowerCase();
 
+// f(x) Protocol SHORT pool addresses
+const WSTETH_SHORT_POOL = '0x25707b9e6690B52C60aE6744d711cf9C1dFC1876';
+const WBTC_SHORT_POOL   = '0xA0cC8162c523998856D59065fAa254F87D20A5b0';
+const SHORT_POOL_MANAGER = '0xaCDc0AB51178d0Ae8F70c1EAd7d3cF5421FDd66D';
+
 /**
  * Live mainnet RPC for FxSdk deposit/withdraw quote calls.
  * fxSAVE epoch state is read from mainnet to avoid stale-epoch errors on forks.
@@ -354,24 +359,28 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
 
   private async _quoteLeverageShort(params: QuoteParams): Promise<DefiSkillQuote | null> {
     const { tokenIn, amountIn, recipient, routingMode, leverageMultiplier = 2, positionId = 0 } = params;
+
+    // Determine market outside try-catch so routing failures return null,
+    // but pool-operational errors propagate as thrown errors to callers.
+    const key = tokenIn.toLowerCase();
+    let market: 'ETH' | 'BTC';
+    if (key === FXUSD_ADDRESS.toLowerCase()) {
+      const m = (params.market?.toUpperCase() ?? '') as 'ETH' | 'BTC';
+      if (m !== 'ETH' && m !== 'BTC') return null;
+      market = m;
+    } else if (key in TOKEN_TO_MARKET) {
+      market = TOKEN_TO_MARKET[key]!;
+    } else {
+      return null;
+    }
+
+    // Pre-flight OUTSIDE try-catch: verify the SHORT pool has sufficient utilization.
+    // f(x) SHORT pools enforce poolMinDebtRatio — if totalDebt/debtCapacity < minRatio,
+    // the on-chain contract rejects new positions with ErrorDebtRatioOutOfRange.
+    // This error must propagate (not be swallowed) so callers can surface it to the user.
+    await this._checkShortPoolOperational(market, leverageSdkRpcUrl(params));
+
     try {
-      const key = tokenIn.toLowerCase();
-
-      // For SHORT positions, fxUSD is the actual collateral.
-      // tokenIn may be:
-      //   - fxUSD address → user holds fxUSD; market from params.market
-      //   - WBTC / wstETH → used as market indicator; pass fxUSD to SDK (user must have fxUSD)
-      let market: 'ETH' | 'BTC';
-      if (key === FXUSD_ADDRESS.toLowerCase()) {
-        const m = (params.market?.toUpperCase() ?? '') as 'ETH' | 'BTC';
-        if (m !== 'ETH' && m !== 'BTC') return null;
-        market = m;
-      } else if (key in TOKEN_TO_MARKET) {
-        market = TOKEN_TO_MARKET[key]!;
-      } else {
-        return null;
-      }
-
       const sdk = new FxSdk({ rpcUrl: leverageSdkRpcUrl(params), chainId: 1 });
       const targets = forkSafeTargets(routingMode);
 
@@ -467,6 +476,42 @@ export class FxProtocolAdapter implements DefiProtocolAdapter {
     } catch (e) {
       console.warn('[FxProtocol] leverage short quote error:', (e as Error).message?.slice(0, 120));
       return null;
+    }
+  }
+
+  private async _checkShortPoolOperational(market: 'ETH' | 'BTC', rpcUrl: string): Promise<void> {
+    const poolAddr = market === 'ETH' ? WSTETH_SHORT_POOL : WBTC_SHORT_POOL;
+    const provider = new ethers.JsonRpcProvider(rpcUrl);
+    const poolManagerIface = new ethers.Interface([
+      'function getPoolInfo(address pool) view returns (uint256 collateralCapacity, uint256 collateralBalance, uint256 rawCollateral, uint256 debtCapacity, uint256 debtBalance)',
+    ]);
+    const poolIface = new ethers.Interface([
+      'function getDebtRatioRange() view returns (uint256 minDebtRatio, uint256 maxDebtRatio)',
+    ]);
+    const [poolInfo, debtRange] = await Promise.all([
+      new ethers.Contract(SHORT_POOL_MANAGER, poolManagerIface, provider)
+        .getPoolInfo(poolAddr).catch(() => null),
+      new ethers.Contract(poolAddr, poolIface, provider)
+        .getDebtRatioRange().catch(() => null),
+    ]);
+    if (poolInfo && debtRange) {
+      const debtCapacity: bigint = poolInfo[3];
+      const debtBalance: bigint = poolInfo[4];
+      const minDebtRatio: bigint = debtRange[0];
+      if (debtCapacity > 0n && minDebtRatio > 0n) {
+        const minRequired = (debtCapacity * minDebtRatio) / (10n ** 18n);
+        if (debtBalance < minRequired) {
+          const tokenSymbol = market === 'ETH' ? 'wstETH' : 'WBTC';
+          const decimals = market === 'ETH' ? 18 : 8;
+          const formatUnits = (v: bigint) => (Number(v) / 10 ** decimals).toFixed(4);
+          throw new Error(
+            `f(x) ${market} SHORT pool is not operational: pool utilization too low ` +
+            `(debtBalance=${formatUnits(debtBalance)} ${tokenSymbol}, ` +
+            `minRequired=${formatUnits(minRequired)} ${tokenSymbol}). ` +
+            `SHORT positions require existing pool debt before new positions can be opened.`
+          );
+        }
+      }
     }
   }
 
