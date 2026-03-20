@@ -386,6 +386,7 @@
         <div class="flex items-center gap-2">
           <span class="text-xs text-slate-500">Wallet:</span>
           <input id="chatWallet" type="text" value="0x7d73932636FbC0E57448BA175AbCd800C60daE5F" class="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white font-mono w-80" placeholder="0x..." oninput="checkSessionWalletMismatch(this.value.trim())" />
+          <button onclick="(function(){var a=document.getElementById('chatWallet').value.trim();if(!a||!/^0x[0-9a-fA-F]{40}$/.test(a)){alert('Invalid address');return;}setActiveWallet(a,true);var t=document.getElementById('errorToast');document.getElementById('errorMsg').textContent='📌 Wallet saved: '+a.slice(0,8)+'...'+a.slice(-6);t.style.background='rgba(16,185,129,0.9)';t.classList.remove('hidden');setTimeout(function(){t.classList.add('hidden');},2500);})()" title="Save as active wallet (persists across page reloads)" class="px-2 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs">📌</button>
         </div>
         <div class="flex items-center gap-2 ml-auto">
           <span class="text-xs text-slate-500">Session:</span>
