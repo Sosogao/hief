@@ -225,12 +225,13 @@ export async function isSafe4337Account(
  *   - It avoids the need for a separate Safe signature inside the UserOp
  */
 export async function buildSafe4337UserOperation(params: {
-  safeAddress:  string;
-  to:           string;
-  value:        bigint | string | number;
-  data:         string;
-  operation?:   0 | 1;   // 0 = Call, 1 = DelegateCall (default: 0)
-  rpcUrl:       string;
+  safeAddress:        string;
+  to:                 string;
+  value:              bigint | string | number;
+  data:               string;
+  operation?:         0 | 1;   // 0 = Call, 1 = DelegateCall (default: 0)
+  rpcUrl:             string;
+  simulatedGasUsed?:  number;  // from pre-flight simulation; used to size callGasLimit
 }): Promise<PackedUserOperation> {
   const { safeAddress, to, rpcUrl } = params;
   const value = BigInt(params.value ?? 0);
@@ -251,12 +252,14 @@ export async function buildSafe4337UserOperation(params: {
   const maxFeePerGas = feeData.maxFeePerGas ?? ethers.parseUnits('20', 'gwei');
   const maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ?? ethers.parseUnits('1', 'gwei');
 
-  // Gas limits for Safe4337 execution.
-  // callGasLimit must cover the full inner call chain:
-  //   executeUserOp → execTransactionFromModule → MultiSend → approve + supply
-  // Aave USDC approve+supply takes ~260k gas, so 500k gives comfortable headroom.
+  // callGasLimit: use simulation result (+ 40% buffer + 50k ERC-4337 overhead) when available.
+  // The simulation measures raw call gas; ERC-4337 adds ~30-50k overhead for validateUserOp
+  // and execTransactionFromModule bookkeeping on top of the inner transaction gas.
+  // Fallback: 800k — generous enough to cover complex multi-step DeFi operations.
   const verificationGasLimit = 150_000n;
-  const callGasLimit = 500_000n;
+  const callGasLimit = params.simulatedGasUsed
+    ? BigInt(Math.ceil(params.simulatedGasUsed * 1.4) + 50_000)
+    : 800_000n;
   const preVerificationGas = 50_000n;
 
   const userOp: PackedUserOperation = {

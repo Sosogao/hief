@@ -659,8 +659,41 @@ async function simulateSettlement(
             || 'WITHDRAW simulation failed — ensure you have deposited funds first';
         }
       }
+    } else if (swapQ?.needsApproval) {
+      // ── Swap with ERC-20 approval: simulate approve + swap as a bundle ──────
+      // Simulating only the swap tx fails when the Safe/EOA has no pre-existing
+      // allowance (the approval hasn't been granted yet). Bundle both steps so
+      // the simulation matches the actual on-chain execution (MultiSend or sequential).
+      const approveData = approveIface.encodeFunctionData('approve', [swapQ.approveTarget, BigInt(intent.input?.amount || '0')]);
+      const swapValueHex = '0x' + (swapQ.swapValue ?? 0n).toString(16);
+      const bundlePayload = {
+        jsonrpc: '2.0', method: 'tenderly_simulateBundle',
+        params: [[
+          { from: simFrom, to: inputToken,    data: approveData,   value: '0x0',      gas: '0x15F90' },  // 90k — approve
+          { from: simFrom, to: swapQ.swapTo,  data: swapQ.swapData, value: swapValueHex, gas: '0x7A120' }, // 500k — swap
+        ], 'latest'],
+        id: 1,
+      };
+      const bundleRes  = await fetch(TENDERLY_RPC_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bundlePayload), signal: AbortSignal.timeout(8000),
+      });
+      const bundleJson = await bundleRes.json() as any;
+      if (bundleJson.error) {
+        simSuccess = false;
+        simError = bundleJson.error?.message || String(bundleJson.error);
+      } else if (Array.isArray(bundleJson.result)) {
+        const results = bundleJson.result as any[];
+        gasUsed = results.reduce((sum: number, r: any) => sum + parseInt(r.gasUsed || '0', 16), 0) || 250_000;
+        simulatedBlock = parseInt(results[results.length - 1]?.blockNumber || '0x0', 16);
+        simSuccess = results.every((r: any) => r.status === true);
+        if (!simSuccess) {
+          const failed = results.find((r: any) => r.status !== true);
+          simError = failed?.error?.message || failed?.revert_reason || 'Transaction reverted';
+        }
+      }
     } else {
-      // ── Single-tx simulation (swap or ETH deposit) ──────────────────────────
+      // ── Single-tx simulation (swap without approval, or ETH deposit) ─────────
       const simTo       = skillQ ? skillQ.contractTo : (swapQ ? swapQ.swapTo   : WETH_ADDRESS);
       const simData     = skillQ ? skillQ.calldata   : (swapQ ? swapQ.swapData : '0xd0e30db0');
       const simValueBig = skillQ ? skillQ.value      : (swapQ ? swapQ.swapValue : ethers.parseEther('0.001'));
@@ -1157,6 +1190,7 @@ async function runAuction(intentId: string, intentHash: string, intent: any): Pr
                 safeAddress: accountInfo.address,
                 to: uoTo, value: uoValue, data: uoData, operation: uoOp,
                 rpcUrl: TENDERLY_RPC_URL,
+                simulatedGasUsed: simResult?.gasUsed,
               });
               const userOpHash = await computeUserOpHash(userOp, TENDERLY_RPC_URL);
               const typedData = await buildUserOpTypedData(userOp, userOpHash, SETTLEMENT_CHAIN_ID, TENDERLY_RPC_URL);
