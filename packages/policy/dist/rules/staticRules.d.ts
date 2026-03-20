@@ -1,4 +1,4 @@
-import type { HIEFIntent, HIEFSolution, Severity } from '@hief/common';
+import type { HIEFIntent, HIEFSolution, HIEFSessionGrant, Severity } from '@hief/common';
 export interface RuleResult {
     ruleId: string;
     passed: boolean;
@@ -14,6 +14,7 @@ interface RuleFinding {
     expected?: string;
 }
 type RuleFn = (intent: HIEFIntent, solution: HIEFSolution) => RuleResult;
+export declare function checkSessionKeyConstraints(intent: HIEFIntent, grant: HIEFSessionGrant, txUsdValue: number): RuleResult;
 export declare const STATIC_RULES: RuleFn[];
 export declare const CRITICAL_RULES: Set<string>;
 export declare const HIGH_RULES: Set<string>;

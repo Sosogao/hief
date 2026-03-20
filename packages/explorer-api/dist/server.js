@@ -20,6 +20,7 @@ const intents_1 = require("./routes/intents");
 const address_1 = require("./routes/address");
 const activity_1 = require("./routes/activity");
 const leaderboard_1 = require("./routes/leaderboard");
+const portfolio_1 = require("./routes/portfolio");
 const app = (0, express_1.default)();
 exports.app = app;
 const PORT = parseInt(process.env.EXPLORER_API_PORT || process.env.PORT || '3006', 10);
@@ -50,6 +51,7 @@ app.use('/v1/explorer/intents', intents_1.intentsRouter);
 app.use('/v1/explorer/address', address_1.addressRouter);
 app.use('/v1/explorer/activity', activity_1.activityRouter);
 app.use('/v1/explorer/leaderboard', leaderboard_1.leaderboardRouter);
+app.use('/v1/explorer/portfolio', portfolio_1.portfolioRouter);
 // ─── Reputation proxy (for backward compat with existing frontend) ────────────
 // Forward /v1/reputation/* to the Reputation API
 const axios_1 = __importDefault(require("axios"));

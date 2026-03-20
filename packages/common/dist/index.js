@@ -20,4 +20,5 @@ __exportStar(require("./hash/intentHash"), exports);
 __exportStar(require("./hash/solutionHash"), exports);
 __exportStar(require("./abi/validate"), exports);
 __exportStar(require("./config"), exports);
+__exportStar(require("./erc7683/adapter"), exports);
 //# sourceMappingURL=index.js.map

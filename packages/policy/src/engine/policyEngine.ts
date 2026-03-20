@@ -1,6 +1,6 @@
-import type { HIEFIntent, HIEFSolution, HIEFPolicyResult, PolicyFinding, ExecutionDiff } from '@hief/common';
+import type { HIEFIntent, HIEFSolution, HIEFSessionGrant, HIEFPolicyResult, PolicyFinding, ExecutionDiff } from '@hief/common';
 import { computeIntentHash } from '@hief/common';
-import { runStaticRules } from '../rules/staticRules';
+import { runStaticRules, checkSessionKeyConstraints } from '../rules/staticRules';
 import { runL4Simulation } from '../simulation/forkSimulator';
 import { getReputationPolicyAdapter, DynamicPolicyParams } from '../reputation/reputationPolicyAdapter';
 import { runReputationAwareRules } from '../reputation/reputationAwareRules';
@@ -71,9 +71,15 @@ async function runL4(
 
 // ── Standard validation (no reputation context) ───────────────────────────────
 
+export interface SessionContext {
+  grant: HIEFSessionGrant;
+  txUsdValue: number; // Estimated USD value of this transaction
+}
+
 export async function validateSolution(
   intent: HIEFIntent,
-  solution: HIEFSolution
+  solution: HIEFSolution,
+  sessionContext?: SessionContext,
 ): Promise<HIEFPolicyResult> {
   const findings: PolicyFinding[] = [];
   const summary: string[] = [];
@@ -92,7 +98,22 @@ export async function validateSolution(
     }
   }
 
-  if (hasCriticalFailure) {
+  // Phase 1b: R13 Session Key Constraints (only when executing via session key)
+  let sessionKeyFailed = false;
+  if (sessionContext) {
+    const r13 = checkSessionKeyConstraints(intent, sessionContext.grant, sessionContext.txUsdValue);
+    if (!r13.passed && r13.finding) {
+      findings.push({
+        ruleId: r13.finding.ruleId,
+        severity: r13.finding.severity,
+        message: r13.finding.message,
+        evidence: r13.finding.field ? { field: r13.finding.field } : undefined,
+      });
+      sessionKeyFailed = r13.severity === 'CRITICAL' || r13.severity === 'HIGH';
+    }
+  }
+
+  if (hasCriticalFailure || sessionKeyFailed) {
     const criticalFindings = findings.filter((f) => f.severity === 'CRITICAL');
     summary.push(`❌ FAIL: ${criticalFindings.length} critical rule(s) violated`);
     criticalFindings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));

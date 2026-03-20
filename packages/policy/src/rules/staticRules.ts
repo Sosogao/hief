@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import type { HIEFIntent, HIEFSolution, PolicyFinding, Severity } from '@hief/common';
+import type { HIEFIntent, HIEFSolution, HIEFSessionGrant, PolicyFinding, Severity } from '@hief/common';
 import { POLICY, BLACKLISTED_SELECTORS, WHITELISTED_PROTOCOLS } from '@hief/common';
 
 export interface RuleResult {
@@ -300,6 +300,70 @@ const R12_chainId: RuleFn = (intent) => {
     },
   };
 };
+
+// ─── R13: Session Key Within Constraints ──────────────────────────────────
+// Called separately (not in STATIC_RULES) because it needs session context.
+// policyEngine passes sessionGrant + estimated tx USD value when available.
+export function checkSessionKeyConstraints(
+  intent: HIEFIntent,
+  grant: HIEFSessionGrant,
+  txUsdValue: number,
+): RuleResult {
+  const now = Math.floor(Date.now() / 1000);
+
+  if (grant.revokedAt) {
+    return _fail('R13', 'HIGH', `Session key grant ${grant.grantId.slice(0, 10)} has been revoked`, 'grant.revokedAt');
+  }
+  if (now >= grant.expiresAt) {
+    return _fail('R13', 'HIGH', `Session key grant expired at ${grant.expiresAt} (now=${now})`, 'grant.expiresAt');
+  }
+  if (intent.chainId !== grant.chainId) {
+    return _fail('R13', 'CRITICAL', `Session key chainId ${grant.chainId} ≠ intent chainId ${intent.chainId}`, 'grant.chainId');
+  }
+  if (intent.smartAccount.toLowerCase() !== grant.userAccount.toLowerCase()) {
+    return _fail('R13', 'CRITICAL', `Session key userAccount ${grant.userAccount} ≠ intent smartAccount ${intent.smartAccount}`, 'grant.userAccount');
+  }
+  if (txUsdValue > grant.constraints.maxSpendPerTxUSD) {
+    return _fail('R13', 'HIGH',
+      `Tx value $${txUsdValue.toFixed(2)} exceeds session key per-tx limit $${grant.constraints.maxSpendPerTxUSD}`,
+      'grant.constraints.maxSpendPerTxUSD');
+  }
+  if (grant.spentUSD + txUsdValue > grant.constraints.maxSpendTotalUSD) {
+    return _fail('R13', 'HIGH',
+      `Cumulative spend $${(grant.spentUSD + txUsdValue).toFixed(2)} would exceed session key total limit $${grant.constraints.maxSpendTotalUSD}`,
+      'grant.constraints.maxSpendTotalUSD');
+  }
+
+  const protocol = (intent.meta?.uiHints?.['protocol'] as string | undefined)?.toLowerCase();
+  if (protocol && !grant.constraints.allowedProtocols.includes(protocol)) {
+    return _fail('R13', 'HIGH',
+      `Protocol "${protocol}" not in session key allowedProtocols: [${grant.constraints.allowedProtocols.join(', ')}]`,
+      'grant.constraints.allowedProtocols');
+  }
+
+  const intentType = intent.meta?.tags?.[0] as string | undefined;
+  if (intentType && !grant.constraints.allowedIntentTypes.includes(intentType)) {
+    return _fail('R13', 'HIGH',
+      `Intent type "${intentType}" not in session key allowedIntentTypes: [${grant.constraints.allowedIntentTypes.join(', ')}]`,
+      'grant.constraints.allowedIntentTypes');
+  }
+
+  if (grant.constraints.allowedTokens && grant.constraints.allowedTokens.length > 0) {
+    const inputToken = intent.input.token.toLowerCase();
+    const allowed = grant.constraints.allowedTokens.map((t) => t.toLowerCase());
+    if (!allowed.includes(inputToken)) {
+      return _fail('R13', 'HIGH',
+        `Input token ${intent.input.token} not in session key allowedTokens whitelist`,
+        'grant.constraints.allowedTokens');
+    }
+  }
+
+  return { ruleId: 'R13', passed: true, severity: 'HIGH' };
+}
+
+function _fail(ruleId: string, severity: Severity, message: string, field?: string): RuleResult {
+  return { ruleId, passed: false, severity, finding: { ruleId, severity, message, field } };
+}
 
 // ─── Rule Registry ────────────────────────────────────────────────────────
 export const STATIC_RULES: RuleFn[] = [

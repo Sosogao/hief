@@ -70,6 +70,46 @@ export interface HIEFIntent {
   meta?: IntentMeta;
   extensions?: Record<string, unknown>;
   signature: IntentSignature;
+
+  // ─── ERC-7683 cross-chain extension (optional, single-chain intents omit these) ─
+  destChainId?: number;              // Destination chain ID
+  settlementContract?: Address;      // On-chain settlement contract (origin chain)
+  fillInstructions?: FillInstruction[]; // Per-dest-chain execution instructions
+}
+
+// ─── ERC-7683 Cross-chain superset fields (optional, used when destChainId set) ─
+
+export interface FillInstruction {
+  destinationChainId: number;
+  destinationSettler: Address; // Settlement contract on dest chain
+  originData: HexString;       // ABI-encoded execution data for dest chain
+}
+
+
+// ─── Session Key (HIEF-SK-01) ─────────────────────────────────────────────────
+
+export interface SessionKeyConstraints {
+  maxSpendPerTxUSD: number;       // Single-tx spend cap in USD, e.g. 1000
+  maxSpendTotalUSD: number;       // Lifetime cap; grant auto-expires when reached
+  allowedProtocols: string[];     // e.g. ['aave', 'fx', 'lido']
+  allowedIntentTypes: string[];   // e.g. ['SWAP', 'DEPOSIT', 'WITHDRAW']
+  allowedTokens?: Address[];      // Optional token whitelist (null = all tokens)
+  requirePolicyPass: true;        // Always true — Policy Engine is mandatory
+}
+
+export interface HIEFSessionGrant {
+  grantId: Bytes32;               // Unique ID (random 32 bytes)
+  sessionKeyAddress: Address;     // Hot key held by HIEF agent (server-side)
+  userAccount: Address;           // User's smart account (Safe / EOA)
+  accountType: 'EOA' | 'SAFE_MULTISIG' | 'SAFE_4337';
+  chainId: number;
+  grantedAt: number;              // Unix timestamp
+  expiresAt: number;              // Unix timestamp (max 7 days recommended)
+  constraints: SessionKeyConstraints;
+  spentUSD: number;               // Runtime cumulative spend (server-maintained)
+  userSignature: HexString;       // User's EIP-712 signature over the grant
+  revokedAt?: number;             // Set when user revokes
+  onChainTxHash?: HexString;      // EIP-7702 / module enable tx hash (Phase 2)
 }
 
 // ─── Solution (HIEF-SOL-01) ───────────────────────────────────────────────────

@@ -1,5 +1,9 @@
-import type { HIEFIntent, HIEFSolution, HIEFPolicyResult } from '@hief/common';
-export declare function validateSolution(intent: HIEFIntent, solution: HIEFSolution): Promise<HIEFPolicyResult>;
+import type { HIEFIntent, HIEFSolution, HIEFSessionGrant, HIEFPolicyResult } from '@hief/common';
+export interface SessionContext {
+    grant: HIEFSessionGrant;
+    txUsdValue: number;
+}
+export declare function validateSolution(intent: HIEFIntent, solution: HIEFSolution, sessionContext?: SessionContext): Promise<HIEFPolicyResult>;
 /**
  * Validate a solution with dynamic per-user policy parameters derived
  * from the user's reputation tier.

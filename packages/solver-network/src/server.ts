@@ -2290,6 +2290,65 @@ app.post('/v1/solver-network/update-default-wallet', (req: Request, res: Respons
   res.json({ success: true, data: { walletType, address } });
 });
 
+// ─── Session Key Endpoints ─────────────────────────────────────────────────────────────────────
+
+import { sessionKeyStore } from './sessionKeyStore';
+
+// POST /v1/solver-network/session-key/grant
+// Body: { userAccount, accountType, chainId, constraints, userSignature, ttlSeconds? }
+app.post('/v1/solver-network/session-key/grant', (req: Request, res: Response) => {
+  const { userAccount, accountType, chainId, constraints, userSignature, ttlSeconds } = req.body;
+  if (!userAccount || !accountType || !chainId || !constraints || !userSignature) {
+    return res.status(400).json({ success: false, error: 'Missing required fields' });
+  }
+  if (!['EOA', 'SAFE_MULTISIG', 'SAFE_4337'].includes(accountType)) {
+    return res.status(400).json({ success: false, error: `Invalid accountType: ${accountType}` });
+  }
+  const required = ['maxSpendPerTxUSD', 'maxSpendTotalUSD', 'allowedProtocols', 'allowedIntentTypes'];
+  for (const f of required) {
+    if (constraints[f] === undefined) {
+      return res.status(400).json({ success: false, error: `Missing constraints.${f}` });
+    }
+  }
+  try {
+    const grant = sessionKeyStore.create({
+      userAccount,
+      accountType,
+      chainId: Number(chainId),
+      constraints: { ...constraints, requirePolicyPass: true },
+      userSignature,
+      ttlSeconds: ttlSeconds ? Number(ttlSeconds) : undefined,
+    });
+    res.json({ success: true, data: grant });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// GET /v1/solver-network/session-key/list?account=0x...&chainId=1
+app.get('/v1/solver-network/session-key/list', (req: Request, res: Response) => {
+  const { account, chainId } = req.query;
+  if (!account || !chainId) {
+    return res.status(400).json({ success: false, error: 'account and chainId required' });
+  }
+  const grants = sessionKeyStore.getActiveByAccount(account as string, Number(chainId));
+  res.json({ success: true, data: grants });
+});
+
+// POST /v1/solver-network/session-key/revoke
+// Body: { grantId, userAccount }
+app.post('/v1/solver-network/session-key/revoke', (req: Request, res: Response) => {
+  const { grantId, userAccount } = req.body;
+  if (!grantId || !userAccount) {
+    return res.status(400).json({ success: false, error: 'grantId and userAccount required' });
+  }
+  const ok = sessionKeyStore.revoke(grantId, userAccount);
+  if (!ok) {
+    return res.status(404).json({ success: false, error: 'Grant not found or account mismatch' });
+  }
+  res.json({ success: true, data: { grantId, revokedAt: Math.floor(Date.now() / 1000) } });
+});
+
 // ─── Start ──────────────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => { console.log(`[SolverNetwork] Service started on port ${PORT}`);
   console.log(`[SolverNetwork] ${SOLVER_PERSONAS.length} solvers registered: ${SOLVER_PERSONAS.map(s => s.name).join(', ')}`);

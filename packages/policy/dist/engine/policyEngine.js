@@ -58,8 +58,7 @@ async function runL4(solution, findings, summary) {
     }
     return simFailed;
 }
-// ── Standard validation (no reputation context) ───────────────────────────────
-async function validateSolution(intent, solution) {
+async function validateSolution(intent, solution, sessionContext) {
     const findings = [];
     const summary = [];
     // Phase 1: Static Rules
@@ -74,7 +73,21 @@ async function validateSolution(intent, solution) {
             });
         }
     }
-    if (hasCriticalFailure) {
+    // Phase 1b: R13 Session Key Constraints (only when executing via session key)
+    let sessionKeyFailed = false;
+    if (sessionContext) {
+        const r13 = (0, staticRules_1.checkSessionKeyConstraints)(intent, sessionContext.grant, sessionContext.txUsdValue);
+        if (!r13.passed && r13.finding) {
+            findings.push({
+                ruleId: r13.finding.ruleId,
+                severity: r13.finding.severity,
+                message: r13.finding.message,
+                evidence: r13.finding.field ? { field: r13.finding.field } : undefined,
+            });
+            sessionKeyFailed = r13.severity === 'CRITICAL' || r13.severity === 'HIGH';
+        }
+    }
+    if (hasCriticalFailure || sessionKeyFailed) {
         const criticalFindings = findings.filter((f) => f.severity === 'CRITICAL');
         summary.push(`❌ FAIL: ${criticalFindings.length} critical rule(s) violated`);
         criticalFindings.forEach((f) => summary.push(`  • [${f.ruleId}] ${f.message}`));

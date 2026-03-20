@@ -19,7 +19,13 @@
       "Bash(grep -n \"TENDERLY_RPC\\\\|fork.*rpc\\\\|config\" /Users/vicky/Documents/GitHub/hief/packages/policy/src/*.ts)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\(''''scripts'''',{}\\), indent=2\\)\\)\")",
       "Bash(ls /Users/vicky/Documents/GitHub/hief/*.sh /Users/vicky/Documents/GitHub/hief/*.js)",
-      "WebFetch(domain:mpp.dev)"
+      "WebFetch(domain:mpp.dev)",
+      "Bash(pnpm --filter @hief/common build)",
+      "Bash(pnpm --filter @hief/policy build)",
+      "Bash(node -e \"const t = require\\(''/Users/vicky/Documents/GitHub/hief/packages/common/dist/types/index.js''\\); console.log\\(Object.keys\\(t\\).filter\\(k => k.includes\\(''Session''\\)\\)\\)\")",
+      "Bash(pnpm --filter @hief/solver-network add @hief/common)",
+      "Bash(pnpm --filter @hief/solver-network add @hief/common@workspace:*)",
+      "Bash(grep -v \"^$\")"
     ]
   }
 }

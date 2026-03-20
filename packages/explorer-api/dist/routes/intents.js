@@ -42,6 +42,14 @@ exports.intentsRouter.get('/', async (req, res) => {
                 intentType: parsed.meta?.tags?.[0] ?? 'SWAP',
                 userIntentText: parsed.meta?.userIntentText,
                 uiHints: parsed.meta?.uiHints,
+                // Simulation info (pre-settlement dry-run)
+                simulation: parsed._simulation ?? null,
+                simulatedAt: parsed._simulatedAt ?? null,
+                // Execution mode (DIRECT or MULTISIG)
+                executionMode: parsed._executionMode ?? 'DIRECT',
+                // Multisig proposal (populated when executionMode === 'MULTISIG')
+                multisigProposal: parsed._multisigProposal ?? null,
+                pendingSignaturesAt: parsed._pendingSignaturesAt ?? null,
                 // Settlement info
                 settlementTxHash: parsed._settlementTxHash ?? null,
                 settlementStatus: parsed._settlementStatus ?? null,
@@ -125,6 +133,14 @@ exports.intentsRouter.get('/:intentId', async (req, res) => {
                 intent: intentData,
                 solutions: parsedSolutions,
                 policyResult: parsedPolicy,
+                // Simulation info (pre-settlement dry-run)
+                simulation: intentData._simulation ?? null,
+                simulatedAt: intentData._simulatedAt ?? null,
+                // Execution mode (DIRECT or MULTISIG)
+                executionMode: intentData._executionMode ?? 'DIRECT',
+                // Multisig proposal (populated when executionMode === 'MULTISIG')
+                multisigProposal: intentData._multisigProposal ?? null,
+                pendingSignaturesAt: intentData._pendingSignaturesAt ?? null,
                 // Settlement info (populated after on-chain execution)
                 settlementTxHash: intentData._settlementTxHash ?? null,
                 settlementStatus: intentData._settlementStatus ?? null,

@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HIGH_RULES = exports.CRITICAL_RULES = exports.STATIC_RULES = void 0;
+exports.checkSessionKeyConstraints = checkSessionKeyConstraints;
 exports.runStaticRules = runStaticRules;
 const ethers_1 = require("ethers");
 const common_1 = require("@hief/common");
@@ -174,9 +175,19 @@ const R8_protocolWhitelist = (_intent, solution) => {
         },
     };
 };
+/** DeFi skill intents (DEPOSIT, STAKE, etc.) intentionally send ETH to a protocol.
+ *  Detect via meta.tags[0] to apply a relaxed R9 check. */
+const DEFI_SKILL_TAGS = new Set([
+    'DEPOSIT', 'WITHDRAW', 'STAKE', 'UNSTAKE', 'PROVIDE_LIQUIDITY', 'REMOVE_LIQUIDITY',
+]);
 // ─── R9: No ETH Value Drain ────────────────────────────────────────────────
 const R9_noEthDrain = (intent, solution) => {
-    const maxSpend = BigInt(intent.constraints.maxSpend ?? '0');
+    const tags = intent.meta?.tags;
+    const isDeFiSkill = Array.isArray(tags) && DEFI_SKILL_TAGS.has(tags[0]);
+    // For DeFi skill intents without an explicit maxSpend, use the input amount as the
+    // implicit ceiling — the user is knowingly sending that token/ETH to the protocol.
+    const implicitMax = isDeFiSkill ? intent.input.amount : '0';
+    const maxSpend = BigInt(intent.constraints.maxSpend ?? implicitMax);
     let totalValue = 0n;
     for (const call of solution.executionPlan.calls) {
         totalValue += BigInt(call.value || '0');
@@ -259,6 +270,49 @@ const R12_chainId = (intent) => {
         },
     };
 };
+// ─── R13: Session Key Within Constraints ──────────────────────────────────
+// Called separately (not in STATIC_RULES) because it needs session context.
+// policyEngine passes sessionGrant + estimated tx USD value when available.
+function checkSessionKeyConstraints(intent, grant, txUsdValue) {
+    const now = Math.floor(Date.now() / 1000);
+    if (grant.revokedAt) {
+        return _fail('R13', 'HIGH', `Session key grant ${grant.grantId.slice(0, 10)} has been revoked`, 'grant.revokedAt');
+    }
+    if (now >= grant.expiresAt) {
+        return _fail('R13', 'HIGH', `Session key grant expired at ${grant.expiresAt} (now=${now})`, 'grant.expiresAt');
+    }
+    if (intent.chainId !== grant.chainId) {
+        return _fail('R13', 'CRITICAL', `Session key chainId ${grant.chainId} ≠ intent chainId ${intent.chainId}`, 'grant.chainId');
+    }
+    if (intent.smartAccount.toLowerCase() !== grant.userAccount.toLowerCase()) {
+        return _fail('R13', 'CRITICAL', `Session key userAccount ${grant.userAccount} ≠ intent smartAccount ${intent.smartAccount}`, 'grant.userAccount');
+    }
+    if (txUsdValue > grant.constraints.maxSpendPerTxUSD) {
+        return _fail('R13', 'HIGH', `Tx value $${txUsdValue.toFixed(2)} exceeds session key per-tx limit $${grant.constraints.maxSpendPerTxUSD}`, 'grant.constraints.maxSpendPerTxUSD');
+    }
+    if (grant.spentUSD + txUsdValue > grant.constraints.maxSpendTotalUSD) {
+        return _fail('R13', 'HIGH', `Cumulative spend $${(grant.spentUSD + txUsdValue).toFixed(2)} would exceed session key total limit $${grant.constraints.maxSpendTotalUSD}`, 'grant.constraints.maxSpendTotalUSD');
+    }
+    const protocol = intent.meta?.uiHints?.['protocol']?.toLowerCase();
+    if (protocol && !grant.constraints.allowedProtocols.includes(protocol)) {
+        return _fail('R13', 'HIGH', `Protocol "${protocol}" not in session key allowedProtocols: [${grant.constraints.allowedProtocols.join(', ')}]`, 'grant.constraints.allowedProtocols');
+    }
+    const intentType = intent.meta?.tags?.[0];
+    if (intentType && !grant.constraints.allowedIntentTypes.includes(intentType)) {
+        return _fail('R13', 'HIGH', `Intent type "${intentType}" not in session key allowedIntentTypes: [${grant.constraints.allowedIntentTypes.join(', ')}]`, 'grant.constraints.allowedIntentTypes');
+    }
+    if (grant.constraints.allowedTokens && grant.constraints.allowedTokens.length > 0) {
+        const inputToken = intent.input.token.toLowerCase();
+        const allowed = grant.constraints.allowedTokens.map((t) => t.toLowerCase());
+        if (!allowed.includes(inputToken)) {
+            return _fail('R13', 'HIGH', `Input token ${intent.input.token} not in session key allowedTokens whitelist`, 'grant.constraints.allowedTokens');
+        }
+    }
+    return { ruleId: 'R13', passed: true, severity: 'HIGH' };
+}
+function _fail(ruleId, severity, message, field) {
+    return { ruleId, passed: false, severity, finding: { ruleId, severity, message, field } };
+}
 // ─── Rule Registry ────────────────────────────────────────────────────────
 exports.STATIC_RULES = [
     R1_deadline,

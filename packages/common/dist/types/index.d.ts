@@ -54,6 +54,36 @@ export interface HIEFIntent {
     meta?: IntentMeta;
     extensions?: Record<string, unknown>;
     signature: IntentSignature;
+    destChainId?: number;
+    settlementContract?: Address;
+    fillInstructions?: FillInstruction[];
+}
+export interface FillInstruction {
+    destinationChainId: number;
+    destinationSettler: Address;
+    originData: HexString;
+}
+export interface SessionKeyConstraints {
+    maxSpendPerTxUSD: number;
+    maxSpendTotalUSD: number;
+    allowedProtocols: string[];
+    allowedIntentTypes: string[];
+    allowedTokens?: Address[];
+    requirePolicyPass: true;
+}
+export interface HIEFSessionGrant {
+    grantId: Bytes32;
+    sessionKeyAddress: Address;
+    userAccount: Address;
+    accountType: 'EOA' | 'SAFE_MULTISIG' | 'SAFE_4337';
+    chainId: number;
+    grantedAt: number;
+    expiresAt: number;
+    constraints: SessionKeyConstraints;
+    spentUSD: number;
+    userSignature: HexString;
+    revokedAt?: number;
+    onChainTxHash?: HexString;
 }
 export interface Call {
     to: Address;
