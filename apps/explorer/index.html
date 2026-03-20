@@ -1794,8 +1794,16 @@ async function loadTestWallets() {
     var res = await fetch(SOLVER_API+'/v1/solver-network/test-wallets');
     var json = await res.json();
     if (!json.success) return;
-    window._testWallets = json.data;
-    renderTestWallets(window._testWallets);
+    // Merge client-side wallet overrides (survive server restarts / Railway redeploys)
+    var wallets = json.data.map(function(w) {
+      var override = localStorage.getItem('hief_wallet_' + w.type);
+      if (override && /^0x[0-9a-fA-F]{40}$/.test(override)) {
+        return Object.assign({}, w, { address: override, owners: [], threshold: 1, ethBalance: null });
+      }
+      return w;
+    });
+    window._testWallets = wallets;
+    renderTestWallets(wallets);
     // Re-apply card highlight after async render (localStorage restore ran before cards existed)
     var saved = localStorage.getItem('hief_active_wallet');
     if (saved) setActiveWallet(saved, true);
@@ -2080,7 +2088,8 @@ async function createSmartWallet(walletType) {
         + '<button onclick="navigator.clipboard.writeText(\''+d.safeAddress+'\')" style="background:rgba(100,116,139,0.15);border:1px solid rgba(100,116,139,0.3);color:#94a3b8;border-radius:6px;padding:4px 10px;font-size:11px;cursor:pointer;">📋 Copy</button>'
         + '</div>'
         + '</div>';
-      // Auto-switch to the new wallet and refresh test wallet list
+      // Auto-switch to the new wallet, persist card override, refresh list
+      try { localStorage.setItem('hief_wallet_' + wTypeLabel, d.safeAddress); } catch(e) {}
       useCreatedWallet(d.safeAddress);
       setTimeout(loadTestWallets, 500);
     } else {
@@ -2117,7 +2126,9 @@ async function setAsServerDefault(walletType, address, owners, threshold) {
     });
     var json = await res.json();
     if (json.success) {
-      // Also set as the active client wallet so it persists in localStorage
+      // Persist wallet override in localStorage so it survives server restarts
+      try { localStorage.setItem('hief_wallet_' + walletType, address); } catch(e) {}
+      // Also set as the active client wallet
       setActiveWallet(address, true);
       setTimeout(loadTestWallets, 200);
       alert('✅ Default updated! ' + walletType + ' → ' + address.slice(0,10) + '...\nOther users on this session will now see the new address.');
